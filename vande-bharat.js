@@ -4219,7 +4219,7 @@ function toon(U, fam, o = {}) {
   m.customProgramCacheKey = () => `vb-toon:${emis ? "e" : ""}${strata ? "s" : ""}${pts ? "p" : ""}${ghost ? "g" : ""}`;
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, {
-      uLo: U[fam + "Lo"], uHi: U[fam + "Hi"], uCLo: lo, uCHi: hi, uCMix: U.cmix,
+      uLo: U[fam + "Lo"], uHi: U[fam + "Hi"], uCLo: lo, uCHi: hi, uCMix: o.forcePaint ? { value: 1 } : U.cmix,
       uInk: U.ink, uGlow: o.emisColor || U.glow, uAmb: U.ambient
     });
     if (emis) sh.uniforms.uEmis = emis;
