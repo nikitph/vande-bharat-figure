@@ -2,7 +2,7 @@
 
 An interactive 3D figure of a Vande Bharat trainset that runs in the browser: one script, no build step for users, no dependencies to install.
 
-**Live demo: https://nikitph.github.io/vande-bharat-figure/**
+**Live demos: [solid](https://nikitph.github.io/vande-bharat-figure/) · [point cloud](https://nikitph.github.io/vande-bharat-figure/points.html)**
 
 ![The train at 160 km/h with airflow over the nose](docs/cruise.png)
 
@@ -11,6 +11,22 @@ It shows three cars of the sixteen — the driving trailer with its nose and cab
 | Cutaway with callouts (Dark theme) | Exploded view (Blueprint theme) |
 | --- | --- |
 | ![Cutaway](docs/cutaway-dark.png) | ![Exploded](docs/exploded-blueprint.png) |
+
+## Point-cloud mode
+
+Set `render="points"` and every surface is resampled into dots (about two million at the default density), with the film, views and options unchanged. Dots can do things lines and solid faces cannot, so this mode adds:
+
+- **Condensing assembly**: parts drift in as loose clouds and settle into shape, while a scan line sweeps the length of the train.
+- **Ghosted cutaway**: instead of cutting the near shell away, it thins to a few percent of its dots, so you see inside without losing the outline.
+- **Particle flows**: air streams past the nose and current runs from the wire to the motors as moving particles, reversing under regenerative braking.
+- **See-through density**: the gaps between dots let seats and equipment show faintly through the body even with the cutaway off.
+- **Heat**: traction motors, the converter and the transformer glow with load (in both modes).
+
+| Assembling (Dark) | Cutaway (Colour) |
+| --- | --- |
+| ![Point-cloud assembly](docs/points-assembly.png) | ![Point-cloud cutaway](docs/points-cutaway.png) |
+
+`density` scales the point count (0.5 is about a million points; the demo uses that on narrow screens) and `pointSize` scales the dots. Changing `density` resamples, which takes a moment.
 
 ## What it does
 
@@ -55,6 +71,8 @@ figure.dispose();
 
 | Option | Default | What it does |
 | --- | --- | --- |
+| `render` | `solid` | `solid` or `points` |
+| `density`, `pointSize` | `1`, `1` | Point count and dot size in point-cloud mode |
 | `theme` | `dark` | `dark`, `paper`, `light`, `blueprint`, `sepia`, `colour` |
 | `livery` | `blue` | `blue` or `saffron`; visible in the `colour` theme |
 | `play`, `speed`, `start` | `true`, `1`, `0` | Run the film, its rate, and the chapter to start on (0–9) |
@@ -87,12 +105,13 @@ src/01-core.js    helpers, shared uniforms, two-tone materials
 src/02-train.js   cars, bogies, nose, pantograph, power path, airflow
 src/03-stage.js   track, platform, overhead line
 src/04-film.js    chapters, timeline, themes, paints, defaults
+src/06-points.js  surface sampling and particle streams for point-cloud mode
 src/05-main.js    renderer, camera, input, overlay, the custom element
 vendor/           three.js r184, pre-bundled
 build.py          concatenates vendor + src into vande-bharat.js
 ```
 
-Run `python3 build.py`, then open `index.html` from any static server. The source files are plain scripts that share one closure with the vendored three.js, where it is available as `F`.
+Run `python3 build.py`, then open `index.html` or `points.html` from any static server. The source files are plain scripts that share one closure with the vendored three.js, where it is available as `F`.
 
 ## Credits
 

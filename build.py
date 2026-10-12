@@ -3,7 +3,7 @@
 import pathlib, re
 root = pathlib.Path(__file__).parent
 prefix = (root / "vendor/three-r184.prefix.js").read_text()
-app = "".join((root / "src" / n).read_text() + "\n" for n in ["01-core.js", "02-train.js", "03-stage.js", "04-film.js", "05-main.js"])
+app = "".join((root / "src" / n).read_text() + "\n" for n in ["01-core.js", "02-train.js", "03-stage.js", "04-film.js", "06-points.js", "05-main.js"])
 paints = set(re.findall(r'\["(\w+)", "[^"]+", "#', app))
 options = set(re.findall(r"(\w+): ", re.search(r"const DEFAULTS = \{(.*?)\n\};", app, re.S).group(1)))
 assert not paints & options, f"paint names clash with option names: {paints & options}"

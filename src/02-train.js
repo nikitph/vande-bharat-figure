@@ -217,7 +217,7 @@ function buildTrain(ctx) {
         const mo = [at(cyl(.29, .8, "z", 20), sx * (WB - .6), .5, -.16)];
         for (let k = 0; k < 5; k++) mo.push(at(cyl(.31, .03, "z", 20), sx * (WB - .6), .5, -.48 + k * .16));
         mo.push(at(rbox(.3, .14, .3, .03), sx * (WB - .6), .82, -.16));
-        M(g, merge(mo), mat("body", "motor"), "motor");
+        M(g, merge(mo), mat("body", "motor", { emis: U.heat, emisColor: U.heatC }), "motor");
         M(g, merge([at(rbox(.82, .6, .2, .05), sx * (WB - .3), .47, .44), at(cyl(.34, .22, "z", 18), sx * WB, WHEEL_R, .44)]), mat("deck", "gearbox"), "gearbox");
         wheelsets.push(ws);
         continue;
@@ -360,7 +360,7 @@ function buildTrain(ctx) {
     const res = [];
     for (const [x, z] of [[-3.9, .7], [-3.9, -.7]]) res.push(at(cyl(.2, 1.5, "x", 14), x, .72, z));
     if (kind === "TC") {
-      M(gUnder, merge([at(rbox(3.2, .66, 2.2, .06), .6, U_Y, 0), at(cyl(.22, 1.5, "z", 12), -.75, .8, 0)]), mat("body", "transformer"), "transformer");
+      M(gUnder, merge([at(rbox(3.2, .66, 2.2, .06), .6, U_Y, 0), at(cyl(.22, 1.5, "z", 12), -.75, .8, 0)]), mat("body", "transformer", { emis: U.heat, emisColor: U.heatC }), "transformer");
       const co = [at(rbox(1.5, .6, 2.3, .05), 3.4, U_Y, 0)];
       for (let k = 0; k < 7; k++) for (const sz of [-1, 1]) co.push(at(box(.05, .5, .04), 2.8 + k * .2, U_Y, sz * 1.16));
       M(gUnder, merge(co), mat("deck", "cooler"), "cooler");
@@ -370,7 +370,7 @@ function buildTrain(ctx) {
     } else if (kind === "MC") {
       const cv = [at(rbox(3.4, .64, 2.2, .06), .3, U_Y, 0)];
       for (let k = 0; k < 9; k++) for (const sz of [-1, 1]) cv.push(at(box(.06, .44, .04), -.9 + k * .3, U_Y, sz * 1.11));
-      M(gUnder, merge(cv), mat("mark", "converter"), "converter");
+      M(gUnder, merge(cv), mat("mark", "converter", { emis: U.heat, emisColor: U.heatC }), "converter");
       M(gUnder, merge([at(rbox(1.3, .56, 1.6, .05), 3.3, U_Y, 0), at(cyl(.42, .1, "z", 18), 3.3, U_Y, .82), at(cyl(.42, .1, "z", 18), 3.3, U_Y, -.82)]), mat("deck", "cooler"), "cooler");
       res.length = 0;
       res.push(at(cyl(.2, 1.4, "x", 14), -3.2, .72, .7), at(cyl(.2, 1.4, "x", 14), -3.2, .72, -.7));
@@ -487,14 +487,14 @@ function buildTrain(ctx) {
   const up = posePanto(1);
 
   /* ----- power path: wire → pantograph → breaker → transformer → converter → motors ----- */
-  const flowA = { value: 0 }, flowDir = { value: 1 }, flows = [];
+  const flowA = { value: 0 }, flowDir = { value: 1 }, flows = [], flowCurves = [];
   const TX = -CAR_PITCH;
   const tube = (pts, rep) => {
     const curve = new T.CatmullRomCurve3(pts.map(p => V3(...p)), false, "catmullrom", .08);
     const len = curve.getLength();
     const m = new T.Mesh(new T.TubeGeometry(curve, Math.max(24, Math.round(len * 5)), .06, 6, false), dashMaterial(U.flow, flowA, U.time, { depthTest: false, speed: flowDir, rep: len * (rep || .8) }));
     m.layers.set(1); m.renderOrder = 8; m.frustumCulled = false;
-    root.add(m); flows.push(m); ctx.track(m.material);
+    root.add(m); flows.push(m); flowCurves.push(curve); ctx.track(m.material);
     return m;
   };
   tube([[TX + PX - 15, WIRE_Y, 0], [TX + PX - 1, WIRE_Y, 0], [TX + up.px, WIRE_Y - .03, 0], [TX + up.ex, up.ey, 0], [TX + PA.x, PA.y, 0], [TX + PX, 4.34, 0], [TX + 5.4, 4.36, 0], [TX + 4.4, 4.42, 0], [TX + 3.6, 4.3, .8],
@@ -504,7 +504,7 @@ function buildTrain(ctx) {
   tube([[.3, .64, -.3], [-4.5, .74, -.3], [-BOGIE_X + .68, .5, -.16], [-BOGIE_X - .68, .5, -.16]]);
 
   /* ----- air over the nose ----- */
-  const airA = { value: 0 }, airs = [];
+  const airA = { value: 0 }, airs = [], airCurves = [];
   {
     const tip = noseMap(1, 0, 0);
     const lines = [[0, 4.04], [.9, 3.92], [-.9, 3.92], [1.62, 2.7], [-1.62, 2.7], [1.62, 1.75], [-1.62, 1.75], [1.5, 3.45], [-1.5, 3.45]];
@@ -527,7 +527,7 @@ function buildTrain(ctx) {
       const curve = new T.CatmullRomCurve3(pts, false, "centripetal");
       const m = new T.Mesh(new T.TubeGeometry(curve, 120, .035, 5, false), dashMaterial(U.air, airA, U.time, { speed: { value: 1.7 }, rep: 9 }));
       m.layers.set(1); m.renderOrder = 6; m.frustumCulled = false;
-      root.add(m); airs.push(m); ctx.track(m.material);
+      root.add(m); airs.push(m); airCurves.push(curve); ctx.track(m.material);
     }
   }
 
@@ -551,6 +551,7 @@ function buildTrain(ctx) {
   const boxPts = [];
   for (const x of [-CAR_PITCH - CAR_H, CAR_PITCH + CAR_H]) for (const y of [0, 4.3]) for (const z of [-1.7, 1.7]) boxPts.push(V3(x, y, z));
 
+  const opt = { tubes: true };
   function apply(S) {
     const E = S.explode;
     for (const g of exGroups) {
@@ -569,15 +570,16 @@ function buildTrain(ctx) {
     const live = sstep(.92, 1, S.panto) * (1 - sstep(0, .05, E));
     flowA.value = S.flow * live * .95;
     flowDir.value = S.power < -.05 ? -1.6 : .6 + 1.4 * Math.abs(S.power);
-    for (const f of flows) f.visible = flowA.value > .01;
+    for (const f of flows) f.visible = opt.tubes && flowA.value > .01;
     airA.value = S.airflow * clamp(S.speed / 110) * (1 - sstep(0, .05, E)) * .85;
-    for (const a of airs) a.visible = airA.value > .01;
+    for (const a of airs) a.visible = opt.tubes && airA.value > .01;
     lampA.value = S.head * .9 * (1 - sstep(0, .2, E));
     for (const l of lamps) l.visible = lampA.value > .01;
     beam.visible = lampA.value > .01;
     U.cabinGlow.value = S.cabin * .16;
+    U.heat.value = Math.abs(S.power) * .42 * live;
     U.screenGlow.value = S.cabin * .12;
   }
 
-  return { root, body, parts, anchors, box: boxPts, apply, cars, count: parts.length };
+  return { root, body, parts, anchors, box: boxPts, apply, cars, count: parts.length, flows, airs, flowCurves, airCurves, flowA, flowDir, airA, opt };
 }

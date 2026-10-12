@@ -1,6 +1,6 @@
 /* ---------- the film: ten chapters of tweens over one looping timeline ---------- */
 const BASE = {
-  speed: 0, doors: 1, panto: 0, power: 0, flow: 0, head: 0, cabin: 0, airflow: 0, streaks: 0,
+  scan: 0, speed: 0, doors: 1, panto: 0, power: 0, flow: 0, head: 0, cabin: 0, airflow: 0, streaks: 0,
   explode: 1, cut: 0, labels: 0, camAz: 318, camEl: 26, camZoom: 1, camX: 0
 };
 const KEYS = Object.keys(BASE);
@@ -13,14 +13,14 @@ const X_DTC = CAR_PITCH, X_TC = -CAR_PITCH;
 
 const CHAPTERS = [{
   id: "build", n: 1, name: "Assembly", status: "ASSEMBLY", dur: 4,
-  tw: [["explode", 0, .3, 3.6, "io"], ...cam(314, 24, 1.08, 0, 0, 4, "s")],
+  tw: [["explode", 0, .3, 3.6, "io"], ["scan", 1, .6, 3.9, "lin"], ...cam(314, 24, 1.08, 0, 0, 4, "s")],
   cap: [
     [.1, "VANDE BHARAT · THREE CARS OF SIXTEEN", "A trainset with no locomotive: the traction equipment is spread out under the coaches."],
     [1.9, "ASSEMBLY", "Bogies first, the underfloor equipment, floor and seats, then the walls, the nose and the roof — the pantograph last."]
   ]
 }, {
   id: "platform", n: 2, name: "At the platform", status: "AT THE PLATFORM", dur: 2,
-  tw: [["cabin", 1, .2, .6], ...cam(302, 17, 1.9, X_DTC - 2, 0, 1.6)],
+  tw: [["scan", 0, 0, .01, "lin"], ["cabin", 1, .2, .6], ...cam(302, 17, 1.9, X_DTC - 2, 0, 1.6)],
   cap: [[.1, "AT THE PLATFORM", "Doors open, steps out, pantograph down. Driving trailer in front, then a motor coach, then a trailer coach."]]
 }, {
   id: "power", n: 3, name: "Power up", status: "POWER UP", dur: 3.8,
@@ -171,11 +171,11 @@ function themeValues(id) {
   return {
     bg: e.bg, ink: e.ink, bodyLo: e.body[0], bodyHi: e.body[1], deckLo: e.deck[0], deckHi: e.deck[1], darkLo: e.dark[0], darkHi: e.dark[1],
     mark: e.mark, glow: e.glow, shadow: e.shadow, foam: e.foam, wave: e.wave, inkStrength: e.inkA, paint: !!e.colour,
-    flow: e.colour ? "#f2541b" : e.glow, air: e.colour ? "#2f8fe0" : mixHex(e.ink, e.mark, .5), cabin: e.colour ? "#ffe2a8" : e.glow, highlight: e.glow
+    flow: e.colour ? "#f2541b" : e.glow, heat: e.colour ? "#ff5a1f" : e.glow, air: e.colour ? "#2f8fe0" : mixHex(e.ink, e.mark, .5), cabin: e.colour ? "#ffe2a8" : e.glow, highlight: e.glow
   };
 }
 const DEFAULTS = {
-  theme: "dark", livery: "blue",
+  theme: "dark", livery: "blue", render: "solid", density: 1, pointSize: 1,
   ...Object.fromEntries(LIGHTS.map(([k, , c]) => [k, c])),
   ...themeValues("dark"), ...PAINTS,
   lineWidth: 1.1, play: true, speed: 1, start: "0", filmCamera: true,

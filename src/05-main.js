@@ -192,7 +192,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
 
   const tracked = [], track = m => (tracked.push(m), m), cache = new Map;
   const cached = (key, make) => { if (!cache.has(key)) cache.set(key, track(make())); return cache.get(key); };
-  const ek = o => o && o.emis ? (o.emis === U.cabinGlow ? "c" : "s") : "";
+  const ek = o => o && o.emis ? (o.emis === U.cabinGlow ? "c" : o.emis === U.heat ? "h" : "s") : "";
   const shellPlane = new T.Plane(V3(0, 0, -1), 1e3);
   const stageClip = [new T.Plane(V3(1, 0, 0), HX - .02), new T.Plane(V3(-1, 0, 0), HX - .02), new T.Plane(V3(0, 0, 1), -ZN - .02), new T.Plane(V3(0, 0, -1), ZF - .02)];
   const ctx = {
@@ -217,6 +217,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     U.markLo.value.copy(U.mark.value).lerp(U.bodyLo.value, .4);
     hexTo(values.highlight, U.sel.value);
     for (const k of ["head", "cabin", "flow", "air"]) hexTo(values[k], U[k].value);
+    hexTo(values.heat, U.heatC.value);
     comp.uniforms.uInkA.value = values.inkStrength;
     U.cmix.value = values.paint ? 1 : 0;
     for (const [k, list] of registry) for (const e of list) e.f(values[k], e.out);
@@ -290,6 +291,30 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     comp.uniforms.uNear.value = camera.near; comp.uniforms.uFar.value = camera.far;
     comp.uniforms.uPx.value = 2 * curHalf / ph;
     comp.uniforms.uLW.value = P.lineWidth * dpr * .5;
+    const pxPerM = ph / (2 * curHalf);
+    U.ptSize.value = clamp(.034 * pxPerM * values.pointSize, 1.3 * dpr * .5, 4.2 * dpr * values.pointSize);
+    if (cloud) { airStream.size.value = clamp(.11 * pxPerM, 2 * dpr * .5, 9 * dpr); flowStream.size.value = clamp(.13 * pxPerM, 2.4 * dpr * .5, 10 * dpr); }
+  }
+  /* point-cloud mode: meshes still cast shadows and take the pointer, but only their dots are drawn */
+  let cloud = null, cloudDensity = 0, airStream = null, flowStream = null;
+  const points = () => values.render === "points";
+  function applyRender() {
+    const pm = points();
+    if (pm && (!cloud || cloudDensity !== values.density)) {
+      if (cloud) for (const c of cloud.clouds) { c.parent.remove(c); c.geometry.dispose(); }
+      cloudDensity = values.density;
+      rawColour(() => { cloud = buildCloud(ctx, [train.root, stage.root], clamp(values.density, .1, 4)); });
+      if (!airStream) {
+        airStream = buildStreams(train.airCurves, U.air, train.airA, { per: 120, seed: 5 });
+        flowStream = buildStreams(train.flowCurves, U.flow, train.flowA, { per: 140, seed: 9, depthTest: false });
+        scene.add(airStream.pts, flowStream.pts);
+      }
+      hooks.onCloud && hooks.onCloud({ points: cloud.total, area: cloud.area });
+    }
+    for (const m of tracked) if (m.userData && m.userData.toonArgs && !m.userData.toonArgs.o.points) { m.colorWrite = !pm; m.depthWrite = !pm; }
+    if (cloud) for (const c of cloud.clouds) c.visible = pm;
+    if (airStream) { airStream.pts.visible = pm; flowStream.pts.visible = pm; }
+    train.opt.tubes = !pm;
   }
 
   const startClock = () => CHAPTERS[clamp(Math.round(Number(values.start) || 0), 0, CHAPTERS.length - 1)].t0 + .001;
@@ -349,6 +374,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     cutC = on ? lerp(1.9, .06, smoother(S.cutaway)) : 1e3;
     shellPlane.normal.set(0, 0, -cutSide);
     shellPlane.constant = cutC;
+    U.cutN.value.set(0, 0, cutSide); U.cutC.value = cutC;
   }
   function tick(dt) {
     wall += dt; lastDt = dt;
@@ -358,11 +384,28 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     followFilm(S, dt === 0);
     updateCut();
     rawColour(() => { train.apply(S); stage.update(S, wall); });
+    U.scatter.value = Math.pow(S.explode, 1.6) * 2.4;
+    U.scanX.value = lerp(-CAR_PITCH - CAR_H - 3, CAR_PITCH + CAR_H + 3, S.scan);
+    U.scanA.value = sstep(0, .04, S.scan) * (1 - sstep(.96, 1, S.scan));
+    if (cloud) {
+      const pm = points();
+      airStream.pts.visible = pm && train.airA.value > .01; flowStream.pts.visible = pm && train.flowA.value > .01;
+      airStream.update(dt, -(8 + S.speed / 3.6 * .6));
+      flowStream.update(dt, (S.power < -.05 ? -1 : 1) * (5 + 6 * Math.abs(S.power)));
+    }
     if (hl.visible && hl.userData.src) { hl.userData.src.updateWorldMatrix(true, false); hl.matrix.copy(hl.userData.src.matrixWorld); hl.matrixWorld.copy(hl.matrix); }
   }
   const swapped = [];
   function render() {
     placeCamera();
+    if (points()) {
+      comp.uniforms.uLW.value = 0;
+      camera.layers.enable(1);
+      renderer.setClearColor(U.bg.value, 1);
+      renderer.setRenderTarget(rtColour); renderer.clear(); renderer.render(scene, camera);
+      renderer.setRenderTarget(null); renderer.render(compScene, compCam);
+      return;
+    }
     camera.layers.set(0);
     scene.traverseVisible(o => { if (o.isMesh && o.layers.mask & 1) { swapped.push(o, o.material); o.material = o.userData.nmat || normalMat; } });
     renderer.setRenderTarget(rtNormal);
@@ -483,6 +526,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     if (ch("labels")) view.callouts = values.labels ? 1 : 0;
     stage.root.visible = !!values.ground;
     stage.setPlatform(values.platform);
+    if (ch("render") || (points() && ch("density"))) applyRender();
     setCursor();
     if (paused || hooks.frozen) { tick(0); render(); overlay?.frame(); }
   }
@@ -552,6 +596,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
       return { x: (p.x * .5 + .5) * W, y: (-p.y * .5 + .5) * H };
     },
     status: () => status(S),
+    get cloud() { return cloud && { points: cloud.total, area: cloud.area }; },
     debug: { scene, camera, renderer, canvas, comp, step: dt => { tick(dt); render(); }, frame: () => render(), eased, view },
     dispose() {
       cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); overlay?.dispose();
@@ -565,6 +610,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   };
   applyColours(); applySun();
   stage.root.visible = !!values.ground; stage.setPlatform(values.platform);
+  if (points()) applyRender();
   setCursor(); resize(); tick(0); render();
   overlay = buildOverlay(host, () => api, () => values);
   if (!hooks.manual && !hooks.frozen) raf = requestAnimationFrame(loop);

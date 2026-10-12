@@ -93,7 +93,9 @@ function makeUniforms() {
     ink: c(), mark: c(), glow: c(), bg: c(), shadow: c(), foam: c(), wave: c(),
     sel: c(), head: c(), tail: c(), cabin: c(), flow: c(), air: c(),
     time: { value: 0 }, cmix: { value: 0 }, ambient: { value: .3 },
-    cabinGlow: { value: 0 }, screenGlow: { value: 0 },
+    cabinGlow: { value: 0 }, screenGlow: { value: 0 }, heat: { value: 0 }, heatC: c(),
+    ptSize: { value: 2 }, scatter: { value: 0 }, scanX: { value: -1e3 }, scanA: { value: 0 },
+    cutN: { value: new T.Vector3(0, 0, -1) }, cutC: { value: 1e3 }, ghost: { value: .07 },
     pal: { color: e => hexTo(e), shade: e => shadeOf(e), hex: e => e }
   };
 }
@@ -112,8 +114,10 @@ function toon(U, fam, o = {}) {
   const emis = o.emis || null, strata = o.strata || 0;
   let hi = U[fam + "Hi"], lo = U[fam + "Lo"];
   if (o.color) { hi = { value: U.pal.color(o.color) }; lo = { value: U.pal.shade(o.color) }; }
+  const pts = !!o.points, ghost = pts && !!o.ghost;
   m.userData.paint = o.color || null;
-  m.customProgramCacheKey = () => `vb-toon:${emis ? "e" : ""}${strata ? "s" : ""}`;
+  m.userData.toonArgs = { fam, o };
+  m.customProgramCacheKey = () => `vb-toon:${emis ? "e" : ""}${strata ? "s" : ""}${pts ? "p" : ""}${ghost ? "g" : ""}`;
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, {
       uLo: U[fam + "Lo"], uHi: U[fam + "Hi"], uCLo: lo, uCHi: hi, uCMix: U.cmix,
@@ -121,22 +125,28 @@ function toon(U, fam, o = {}) {
     });
     if (emis) sh.uniforms.uEmis = emis;
     if (strata) sh.uniforms.uStrata = { value: strata };
+    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost });
     sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vW;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + WPOS);
+      .replace("#include <common>", "#include <common>\nvarying vec3 vW;" + (pts ? "\nattribute vec3 aScat; attribute float aJit; attribute float aKeep; varying float vJit; varying float vKeep; uniform float uPt, uScatter;" : ""))
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + (pts ? "transformed += aScat * uScatter; vJit = aJit; vKeep = aKeep;\n" : "") + WPOS)
+      .replace("#include <project_vertex>", "#include <project_vertex>\n" + (pts ? "gl_PointSize = uPt * (0.7 + 0.6 * aJit);" : ""));
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <shadowmap_pars_fragment>", softShadowPars())
       .replace("#include <common>", `#include <common>
 uniform vec3 uLo, uHi, uInk, uGlow, uCLo, uCHi; uniform float uCMix, uAmb;
 ${emis ? "uniform float uEmis;" : ""}
 ${strata ? "uniform float uStrata;" : ""}
-varying vec3 vW;`)
-      .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {")
+varying vec3 vW;
+${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost; uniform vec3 uCutN;" : ""}`)
+      .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {" + (pts ? `
+        vec2 pc_ = gl_PointCoord * 2.0 - 1.0; if (dot(pc_, pc_) > 1.0) discard;
+        ${ghost ? "if (dot(vW, uCutN) > uCutC && vKeep > uGhost) discard;" : ""}` : ""))
       .replace("#include <opaque_fragment>", `
       float shm = getShadowMask();
       float kd = max(dot(normal, directionalLights[0].direction), 0.0) * shm;
       float fl = max(dot(normal, directionalLights[1].direction), 0.0);
       float lum = uAmb + 0.70 * kd + 0.20 * fl;
+      ${pts ? "lum += 0.1;" : ""}
       vec3 col = mix(mix(uLo, uCLo, uCMix), mix(uHi, uCHi, uCMix), smoothstep(0.26, 1.0, lum));
       ${strata ? `{
         vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
@@ -147,6 +157,9 @@ varying vec3 vW;`)
         }
       }` : ""}
       ${emis ? "col = mix(col, uGlow, clamp(uEmis, 0.0, 1.0));" : ""}
+      ${pts ? `col *= 0.88 + 0.24 * vJit;
+      { float band = uScanA * (1.0 - smoothstep(0.0, 1.6, abs(vW.x - uScanX))) ; float trail = uScanA * 0.25 * step(vW.x, uScanX) * (1.0 - smoothstep(0.0, 9.0, uScanX - vW.x));
+        col = mix(col, uGlow, clamp(band + trail, 0.0, 0.9)); }` : ""}
       gl_FragColor = vec4(col, 1.0);`);
   };
   return m;

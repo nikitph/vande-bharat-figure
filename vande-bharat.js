@@ -4192,7 +4192,9 @@ function makeUniforms() {
     ink: c(), mark: c(), glow: c(), bg: c(), shadow: c(), foam: c(), wave: c(),
     sel: c(), head: c(), tail: c(), cabin: c(), flow: c(), air: c(),
     time: { value: 0 }, cmix: { value: 0 }, ambient: { value: .3 },
-    cabinGlow: { value: 0 }, screenGlow: { value: 0 },
+    cabinGlow: { value: 0 }, screenGlow: { value: 0 }, heat: { value: 0 }, heatC: c(),
+    ptSize: { value: 2 }, scatter: { value: 0 }, scanX: { value: -1e3 }, scanA: { value: 0 },
+    cutN: { value: new T.Vector3(0, 0, -1) }, cutC: { value: 1e3 }, ghost: { value: .07 },
     pal: { color: e => hexTo(e), shade: e => shadeOf(e), hex: e => e }
   };
 }
@@ -4211,8 +4213,10 @@ function toon(U, fam, o = {}) {
   const emis = o.emis || null, strata = o.strata || 0;
   let hi = U[fam + "Hi"], lo = U[fam + "Lo"];
   if (o.color) { hi = { value: U.pal.color(o.color) }; lo = { value: U.pal.shade(o.color) }; }
+  const pts = !!o.points, ghost = pts && !!o.ghost;
   m.userData.paint = o.color || null;
-  m.customProgramCacheKey = () => `vb-toon:${emis ? "e" : ""}${strata ? "s" : ""}`;
+  m.userData.toonArgs = { fam, o };
+  m.customProgramCacheKey = () => `vb-toon:${emis ? "e" : ""}${strata ? "s" : ""}${pts ? "p" : ""}${ghost ? "g" : ""}`;
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, {
       uLo: U[fam + "Lo"], uHi: U[fam + "Hi"], uCLo: lo, uCHi: hi, uCMix: U.cmix,
@@ -4220,22 +4224,28 @@ function toon(U, fam, o = {}) {
     });
     if (emis) sh.uniforms.uEmis = emis;
     if (strata) sh.uniforms.uStrata = { value: strata };
+    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost });
     sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vW;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + WPOS);
+      .replace("#include <common>", "#include <common>\nvarying vec3 vW;" + (pts ? "\nattribute vec3 aScat; attribute float aJit; attribute float aKeep; varying float vJit; varying float vKeep; uniform float uPt, uScatter;" : ""))
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + (pts ? "transformed += aScat * uScatter; vJit = aJit; vKeep = aKeep;\n" : "") + WPOS)
+      .replace("#include <project_vertex>", "#include <project_vertex>\n" + (pts ? "gl_PointSize = uPt * (0.7 + 0.6 * aJit);" : ""));
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <shadowmap_pars_fragment>", softShadowPars())
       .replace("#include <common>", `#include <common>
 uniform vec3 uLo, uHi, uInk, uGlow, uCLo, uCHi; uniform float uCMix, uAmb;
 ${emis ? "uniform float uEmis;" : ""}
 ${strata ? "uniform float uStrata;" : ""}
-varying vec3 vW;`)
-      .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {")
+varying vec3 vW;
+${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost; uniform vec3 uCutN;" : ""}`)
+      .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {" + (pts ? `
+        vec2 pc_ = gl_PointCoord * 2.0 - 1.0; if (dot(pc_, pc_) > 1.0) discard;
+        ${ghost ? "if (dot(vW, uCutN) > uCutC && vKeep > uGhost) discard;" : ""}` : ""))
       .replace("#include <opaque_fragment>", `
       float shm = getShadowMask();
       float kd = max(dot(normal, directionalLights[0].direction), 0.0) * shm;
       float fl = max(dot(normal, directionalLights[1].direction), 0.0);
       float lum = uAmb + 0.70 * kd + 0.20 * fl;
+      ${pts ? "lum += 0.1;" : ""}
       vec3 col = mix(mix(uLo, uCLo, uCMix), mix(uHi, uCHi, uCMix), smoothstep(0.26, 1.0, lum));
       ${strata ? `{
         vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
@@ -4246,6 +4256,9 @@ varying vec3 vW;`)
         }
       }` : ""}
       ${emis ? "col = mix(col, uGlow, clamp(uEmis, 0.0, 1.0));" : ""}
+      ${pts ? `col *= 0.88 + 0.24 * vJit;
+      { float band = uScanA * (1.0 - smoothstep(0.0, 1.6, abs(vW.x - uScanX))) ; float trail = uScanA * 0.25 * step(vW.x, uScanX) * (1.0 - smoothstep(0.0, 9.0, uScanX - vW.x));
+        col = mix(col, uGlow, clamp(band + trail, 0.0, 0.9)); }` : ""}
       gl_FragColor = vec4(col, 1.0);`);
   };
   return m;
@@ -4512,7 +4525,7 @@ function buildTrain(ctx) {
         const mo = [at(cyl(.29, .8, "z", 20), sx * (WB - .6), .5, -.16)];
         for (let k = 0; k < 5; k++) mo.push(at(cyl(.31, .03, "z", 20), sx * (WB - .6), .5, -.48 + k * .16));
         mo.push(at(rbox(.3, .14, .3, .03), sx * (WB - .6), .82, -.16));
-        M(g, merge(mo), mat("body", "motor"), "motor");
+        M(g, merge(mo), mat("body", "motor", { emis: U.heat, emisColor: U.heatC }), "motor");
         M(g, merge([at(rbox(.82, .6, .2, .05), sx * (WB - .3), .47, .44), at(cyl(.34, .22, "z", 18), sx * WB, WHEEL_R, .44)]), mat("deck", "gearbox"), "gearbox");
         wheelsets.push(ws);
         continue;
@@ -4655,7 +4668,7 @@ function buildTrain(ctx) {
     const res = [];
     for (const [x, z] of [[-3.9, .7], [-3.9, -.7]]) res.push(at(cyl(.2, 1.5, "x", 14), x, .72, z));
     if (kind === "TC") {
-      M(gUnder, merge([at(rbox(3.2, .66, 2.2, .06), .6, U_Y, 0), at(cyl(.22, 1.5, "z", 12), -.75, .8, 0)]), mat("body", "transformer"), "transformer");
+      M(gUnder, merge([at(rbox(3.2, .66, 2.2, .06), .6, U_Y, 0), at(cyl(.22, 1.5, "z", 12), -.75, .8, 0)]), mat("body", "transformer", { emis: U.heat, emisColor: U.heatC }), "transformer");
       const co = [at(rbox(1.5, .6, 2.3, .05), 3.4, U_Y, 0)];
       for (let k = 0; k < 7; k++) for (const sz of [-1, 1]) co.push(at(box(.05, .5, .04), 2.8 + k * .2, U_Y, sz * 1.16));
       M(gUnder, merge(co), mat("deck", "cooler"), "cooler");
@@ -4665,7 +4678,7 @@ function buildTrain(ctx) {
     } else if (kind === "MC") {
       const cv = [at(rbox(3.4, .64, 2.2, .06), .3, U_Y, 0)];
       for (let k = 0; k < 9; k++) for (const sz of [-1, 1]) cv.push(at(box(.06, .44, .04), -.9 + k * .3, U_Y, sz * 1.11));
-      M(gUnder, merge(cv), mat("mark", "converter"), "converter");
+      M(gUnder, merge(cv), mat("mark", "converter", { emis: U.heat, emisColor: U.heatC }), "converter");
       M(gUnder, merge([at(rbox(1.3, .56, 1.6, .05), 3.3, U_Y, 0), at(cyl(.42, .1, "z", 18), 3.3, U_Y, .82), at(cyl(.42, .1, "z", 18), 3.3, U_Y, -.82)]), mat("deck", "cooler"), "cooler");
       res.length = 0;
       res.push(at(cyl(.2, 1.4, "x", 14), -3.2, .72, .7), at(cyl(.2, 1.4, "x", 14), -3.2, .72, -.7));
@@ -4782,14 +4795,14 @@ function buildTrain(ctx) {
   const up = posePanto(1);
 
   /* ----- power path: wire \u2192 pantograph \u2192 breaker \u2192 transformer \u2192 converter \u2192 motors ----- */
-  const flowA = { value: 0 }, flowDir = { value: 1 }, flows = [];
+  const flowA = { value: 0 }, flowDir = { value: 1 }, flows = [], flowCurves = [];
   const TX = -CAR_PITCH;
   const tube = (pts, rep) => {
     const curve = new T.CatmullRomCurve3(pts.map(p => V3(...p)), false, "catmullrom", .08);
     const len = curve.getLength();
     const m = new T.Mesh(new T.TubeGeometry(curve, Math.max(24, Math.round(len * 5)), .06, 6, false), dashMaterial(U.flow, flowA, U.time, { depthTest: false, speed: flowDir, rep: len * (rep || .8) }));
     m.layers.set(1); m.renderOrder = 8; m.frustumCulled = false;
-    root.add(m); flows.push(m); ctx.track(m.material);
+    root.add(m); flows.push(m); flowCurves.push(curve); ctx.track(m.material);
     return m;
   };
   tube([[TX + PX - 15, WIRE_Y, 0], [TX + PX - 1, WIRE_Y, 0], [TX + up.px, WIRE_Y - .03, 0], [TX + up.ex, up.ey, 0], [TX + PA.x, PA.y, 0], [TX + PX, 4.34, 0], [TX + 5.4, 4.36, 0], [TX + 4.4, 4.42, 0], [TX + 3.6, 4.3, .8],
@@ -4799,7 +4812,7 @@ function buildTrain(ctx) {
   tube([[.3, .64, -.3], [-4.5, .74, -.3], [-BOGIE_X + .68, .5, -.16], [-BOGIE_X - .68, .5, -.16]]);
 
   /* ----- air over the nose ----- */
-  const airA = { value: 0 }, airs = [];
+  const airA = { value: 0 }, airs = [], airCurves = [];
   {
     const tip = noseMap(1, 0, 0);
     const lines = [[0, 4.04], [.9, 3.92], [-.9, 3.92], [1.62, 2.7], [-1.62, 2.7], [1.62, 1.75], [-1.62, 1.75], [1.5, 3.45], [-1.5, 3.45]];
@@ -4822,7 +4835,7 @@ function buildTrain(ctx) {
       const curve = new T.CatmullRomCurve3(pts, false, "centripetal");
       const m = new T.Mesh(new T.TubeGeometry(curve, 120, .035, 5, false), dashMaterial(U.air, airA, U.time, { speed: { value: 1.7 }, rep: 9 }));
       m.layers.set(1); m.renderOrder = 6; m.frustumCulled = false;
-      root.add(m); airs.push(m); ctx.track(m.material);
+      root.add(m); airs.push(m); airCurves.push(curve); ctx.track(m.material);
     }
   }
 
@@ -4846,6 +4859,7 @@ function buildTrain(ctx) {
   const boxPts = [];
   for (const x of [-CAR_PITCH - CAR_H, CAR_PITCH + CAR_H]) for (const y of [0, 4.3]) for (const z of [-1.7, 1.7]) boxPts.push(V3(x, y, z));
 
+  const opt = { tubes: true };
   function apply(S) {
     const E = S.explode;
     for (const g of exGroups) {
@@ -4864,17 +4878,18 @@ function buildTrain(ctx) {
     const live = sstep(.92, 1, S.panto) * (1 - sstep(0, .05, E));
     flowA.value = S.flow * live * .95;
     flowDir.value = S.power < -.05 ? -1.6 : .6 + 1.4 * Math.abs(S.power);
-    for (const f of flows) f.visible = flowA.value > .01;
+    for (const f of flows) f.visible = opt.tubes && flowA.value > .01;
     airA.value = S.airflow * clamp(S.speed / 110) * (1 - sstep(0, .05, E)) * .85;
-    for (const a of airs) a.visible = airA.value > .01;
+    for (const a of airs) a.visible = opt.tubes && airA.value > .01;
     lampA.value = S.head * .9 * (1 - sstep(0, .2, E));
     for (const l of lamps) l.visible = lampA.value > .01;
     beam.visible = lampA.value > .01;
     U.cabinGlow.value = S.cabin * .16;
+    U.heat.value = Math.abs(S.power) * .42 * live;
     U.screenGlow.value = S.cabin * .12;
   }
 
-  return { root, body, parts, anchors, box: boxPts, apply, cars, count: parts.length };
+  return { root, body, parts, anchors, box: boxPts, apply, cars, count: parts.length, flows, airs, flowCurves, airCurves, flowA, flowDir, airA, opt };
 }
 
 /* ---------- the stage: track, platform, overhead line ---------- */
@@ -5031,7 +5046,7 @@ function buildStage(ctx) {
 
 /* ---------- the film: ten chapters of tweens over one looping timeline ---------- */
 const BASE = {
-  speed: 0, doors: 1, panto: 0, power: 0, flow: 0, head: 0, cabin: 0, airflow: 0, streaks: 0,
+  scan: 0, speed: 0, doors: 1, panto: 0, power: 0, flow: 0, head: 0, cabin: 0, airflow: 0, streaks: 0,
   explode: 1, cut: 0, labels: 0, camAz: 318, camEl: 26, camZoom: 1, camX: 0
 };
 const KEYS = Object.keys(BASE);
@@ -5044,14 +5059,14 @@ const X_DTC = CAR_PITCH, X_TC = -CAR_PITCH;
 
 const CHAPTERS = [{
   id: "build", n: 1, name: "Assembly", status: "ASSEMBLY", dur: 4,
-  tw: [["explode", 0, .3, 3.6, "io"], ...cam(314, 24, 1.08, 0, 0, 4, "s")],
+  tw: [["explode", 0, .3, 3.6, "io"], ["scan", 1, .6, 3.9, "lin"], ...cam(314, 24, 1.08, 0, 0, 4, "s")],
   cap: [
     [.1, "VANDE BHARAT \u00b7 THREE CARS OF SIXTEEN", "A trainset with no locomotive: the traction equipment is spread out under the coaches."],
     [1.9, "ASSEMBLY", "Bogies first, the underfloor equipment, floor and seats, then the walls, the nose and the roof \u2014 the pantograph last."]
   ]
 }, {
   id: "platform", n: 2, name: "At the platform", status: "AT THE PLATFORM", dur: 2,
-  tw: [["cabin", 1, .2, .6], ...cam(302, 17, 1.9, X_DTC - 2, 0, 1.6)],
+  tw: [["scan", 0, 0, .01, "lin"], ["cabin", 1, .2, .6], ...cam(302, 17, 1.9, X_DTC - 2, 0, 1.6)],
   cap: [[.1, "AT THE PLATFORM", "Doors open, steps out, pantograph down. Driving trailer in front, then a motor coach, then a trailer coach."]]
 }, {
   id: "power", n: 3, name: "Power up", status: "POWER UP", dur: 3.8,
@@ -5202,11 +5217,11 @@ function themeValues(id) {
   return {
     bg: e.bg, ink: e.ink, bodyLo: e.body[0], bodyHi: e.body[1], deckLo: e.deck[0], deckHi: e.deck[1], darkLo: e.dark[0], darkHi: e.dark[1],
     mark: e.mark, glow: e.glow, shadow: e.shadow, foam: e.foam, wave: e.wave, inkStrength: e.inkA, paint: !!e.colour,
-    flow: e.colour ? "#f2541b" : e.glow, air: e.colour ? "#2f8fe0" : mixHex(e.ink, e.mark, .5), cabin: e.colour ? "#ffe2a8" : e.glow, highlight: e.glow
+    flow: e.colour ? "#f2541b" : e.glow, heat: e.colour ? "#ff5a1f" : e.glow, air: e.colour ? "#2f8fe0" : mixHex(e.ink, e.mark, .5), cabin: e.colour ? "#ffe2a8" : e.glow, highlight: e.glow
   };
 }
 const DEFAULTS = {
-  theme: "dark", livery: "blue",
+  theme: "dark", livery: "blue", render: "solid", density: 1, pointSize: 1,
   ...Object.fromEntries(LIGHTS.map(([k, , c]) => [k, c])),
   ...themeValues("dark"), ...PAINTS,
   lineWidth: 1.1, play: true, speed: 1, start: "0", filmCamera: true,
@@ -5238,6 +5253,135 @@ const TOGGLES = [
   { key: "head", label: "Headlights", keys: { head: [0, 1] }, dur: .2 },
   { key: "cabin", label: "Cabin lights", keys: { cabin: [0, 1] }, dur: .4 }
 ];
+
+/* ---------- point-cloud rendering: every surface resampled into dots ---------- */
+// Points live as children of the meshes they were sampled from, so every animation
+// (doors, wheels, pantograph, explode) carries them along for free.
+function sampleSurface(geo, perM2, rand, xf = null, minPerM = 0) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  if (!g.attributes.normal) g.computeVertexNormals();
+  const P = g.attributes.position.array, Nn = g.attributes.normal.array, tri = P.length / 9;
+  const cum = new Float64Array(tri);
+  let area = 0;
+  const a = new T.Vector3, b = new T.Vector3, c = new T.Vector3;
+  for (let i = 0; i < tri; i++) {
+    a.fromArray(P, i * 9); b.fromArray(P, i * 9 + 3); c.fromArray(P, i * 9 + 6);
+    area += b.sub(a).cross(c.sub(a)).length() / 2;
+    cum[i] = area;
+  }
+  if (!g.boundingBox) g.computeBoundingBox();
+  const span = g.boundingBox.getSize(new T.Vector3()), longest = Math.max(span.x, span.y, span.z) * (xf ? 1 : 1);
+  // thin, long things (wires, rails, arms) get points by length as well as by area
+  const n = Math.min(400000, Math.round(Math.max(area * perM2, longest * minPerM) + rand()));
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), sc = new Float32Array(n * 3), jit = new Float32Array(n), keep = new Float32Array(n);
+  const p = new T.Vector3, q = new T.Vector3;
+  for (let k = 0; k < n; k++) {
+    const r = rand() * area;
+    let lo = 0, hi = tri - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cum[m] < r) lo = m + 1; else hi = m; }
+    let u = rand(), v = rand();
+    if (u + v > 1) { u = 1 - u; v = 1 - v; }
+    const w = 1 - u - v, o = lo * 9;
+    for (let j = 0; j < 3; j++) {
+      pos[k * 3 + j] = P[o + j] * w + P[o + 3 + j] * u + P[o + 6 + j] * v;
+      nor[k * 3 + j] = Nn[o + j] * w + Nn[o + 3 + j] * u + Nn[o + 6 + j] * v;
+    }
+    // a direction to drift along when the figure comes apart: mostly outward and up
+    const th = rand() * Math.PI * 2, ph = Math.acos(2 * rand() - 1), d = .6 + rand() * 1.4;
+    sc[k * 3] = Math.sin(ph) * Math.cos(th) * d; sc[k * 3 + 1] = Math.abs(Math.cos(ph)) * d * 1.3; sc[k * 3 + 2] = Math.sin(ph) * Math.sin(th) * d;
+    jit[k] = rand(); keep[k] = rand();
+  }
+  if (xf) {
+    const nm = new T.Matrix3().getNormalMatrix(xf);
+    for (let k = 0; k < n; k++) {
+      p.fromArray(pos, k * 3).applyMatrix4(xf).toArray(pos, k * 3);
+      q.fromArray(nor, k * 3).applyMatrix3(nm).toArray(nor, k * 3);
+    }
+  }
+  return { n, area, pos, nor, sc, jit, keep };
+}
+function cloudGeometry(parts) {
+  const n = parts.reduce((s, p) => s + p.n, 0), g = new T.BufferGeometry;
+  const cat = (key, size) => { const out = new Float32Array(n * size); let o = 0; for (const p of parts) { out.set(p[key], o); o += p[key].length; } return out; };
+  g.setAttribute("position", new T.BufferAttribute(cat("pos", 3), 3));
+  g.setAttribute("normal", new T.BufferAttribute(cat("nor", 3), 3));
+  g.setAttribute("aScat", new T.BufferAttribute(cat("sc", 3), 3));
+  g.setAttribute("aJit", new T.BufferAttribute(cat("jit", 1), 1));
+  g.setAttribute("aKeep", new T.BufferAttribute(cat("keep", 1), 1));
+  return g;
+}
+
+function buildCloud(ctx, roots, density) {
+  const rand = rng(2026), clouds = [], cache = new Map;
+  const pointsMat = src => {
+    if (!cache.has(src.uuid)) {
+      const { fam, o } = src.userData.toonArgs, shellSrc = !!(src.clippingPlanes && src.clippingPlanes.length === 1);
+      const m = toon(ctx.U, fam, { ...o, points: true, ghost: shellSrc, clip: shellSrc ? undefined : o.clip, side: T.FrontSide });
+      cache.set(src.uuid, ctx.track(m));
+    }
+    return cache.get(src.uuid);
+  };
+  let total = 0, area = 0;
+  for (const root of roots) {
+    const list = [];
+    root.traverse(o => { if (o.isMesh && o.layers.mask === 1 && o.material && o.material.userData && o.material.userData.toonArgs) list.push(o); });
+    for (const m of list) {
+      const per = (m.userData.part ? 300 : m.userData.cloud ?? 150) * density, minL = (m.userData.part ? 60 : 45) * density;
+      let parts;
+      if (m.isInstancedMesh) {
+        parts = [];
+        const mx = new T.Matrix4;
+        for (let i = 0; i < m.count; i++) { m.getMatrixAt(i, mx); parts.push(sampleSurface(m.geometry, per, rand, mx.clone(), 0)); }
+      } else parts = [sampleSurface(m.geometry, per, rand, null, minL)];
+      const g = cloudGeometry(parts);
+      const pts = new T.Points(g, pointsMat(m.material));
+      pts.receiveShadow = true; pts.castShadow = false; pts.frustumCulled = false;
+      pts.userData.cloud = true;
+      m.add(pts);
+      clouds.push(pts);
+      total += g.attributes.position.count; area += parts.reduce((s, p) => s + p.area, 0);
+    }
+  }
+  return { clouds, total, area, materials: [...cache.values()] };
+}
+
+// glowing particles that run along a set of curves
+function buildStreams(curves, colour, alpha, o = {}) {
+  const per = o.per || 90, samples = curves.map(c => c.getSpacedPoints(400));
+  const lens = curves.map(c => c.getLength());
+  const n = curves.length * per, g = new T.BufferGeometry, pos = new Float32Array(n * 3), seed = new Float32Array(n);
+  const r = rng(o.seed || 3);
+  for (let i = 0; i < n; i++) seed[i] = r();
+  g.setAttribute("position", new T.BufferAttribute(pos, 3));
+  g.setAttribute("aSeed", new T.BufferAttribute(seed, 1));
+  const size = { value: 4 };
+  const mat = new T.ShaderMaterial({
+    transparent: true, depthWrite: false, depthTest: o.depthTest ?? true, blending: T.NormalBlending,
+    uniforms: { uC: colour, uA: alpha, uSize: size },
+    vertexShader: "attribute float aSeed; varying float vS; uniform float uSize; void main(){ vS = aSeed; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize * (0.6 + 0.8 * aSeed); }",
+    fragmentShader: "uniform vec3 uC; uniform float uA; varying float vS; void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float r = dot(p, p); if (r > 1.0) discard; gl_FragColor = vec4(uC, uA * (1.0 - r * 0.6) * (0.55 + 0.45 * vS)); }"
+  });
+  const pts = new T.Points(g, mat);
+  pts.frustumCulled = false; pts.layers.set(1); pts.renderOrder = 9;
+  const phase = new Float32Array(n);
+  for (let i = 0; i < n; i++) phase[i] = (i % per) / per + seed[i] / per;
+  return {
+    pts, mat, size,
+    update(dt, speed) {
+      if (!pts.visible) return;
+      for (let c = 0; c < curves.length; c++) {
+        const sp = samples[c], m = sp.length - 1, step = speed * dt / lens[c];
+        for (let k = 0; k < per; k++) {
+          const i = c * per + k;
+          phase[i] = ((phase[i] + step * (.8 + .4 * seed[i])) % 1 + 1) % 1;
+          const f = phase[i] * m, j = Math.min(m - 1, Math.floor(f)), t = f - j, a = sp[j], b = sp[j + 1];
+          pos[i * 3] = a.x + (b.x - a.x) * t; pos[i * 3 + 1] = a.y + (b.y - a.y) * t; pos[i * 3 + 2] = a.z + (b.z - a.z) * t;
+        }
+      }
+      g.attributes.position.needsUpdate = true;
+    }
+  };
+}
 
 /* ---------- captions, callouts and the inspect tooltip (plain DOM over the canvas) ---------- */
 const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace', MONO_SVG = MONO.replace(/"/g, "'");
@@ -5433,7 +5577,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
 
   const tracked = [], track = m => (tracked.push(m), m), cache = new Map;
   const cached = (key, make) => { if (!cache.has(key)) cache.set(key, track(make())); return cache.get(key); };
-  const ek = o => o && o.emis ? (o.emis === U.cabinGlow ? "c" : "s") : "";
+  const ek = o => o && o.emis ? (o.emis === U.cabinGlow ? "c" : o.emis === U.heat ? "h" : "s") : "";
   const shellPlane = new T.Plane(V3(0, 0, -1), 1e3);
   const stageClip = [new T.Plane(V3(1, 0, 0), HX - .02), new T.Plane(V3(-1, 0, 0), HX - .02), new T.Plane(V3(0, 0, 1), -ZN - .02), new T.Plane(V3(0, 0, -1), ZF - .02)];
   const ctx = {
@@ -5458,6 +5602,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     U.markLo.value.copy(U.mark.value).lerp(U.bodyLo.value, .4);
     hexTo(values.highlight, U.sel.value);
     for (const k of ["head", "cabin", "flow", "air"]) hexTo(values[k], U[k].value);
+    hexTo(values.heat, U.heatC.value);
     comp.uniforms.uInkA.value = values.inkStrength;
     U.cmix.value = values.paint ? 1 : 0;
     for (const [k, list] of registry) for (const e of list) e.f(values[k], e.out);
@@ -5531,6 +5676,30 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     comp.uniforms.uNear.value = camera.near; comp.uniforms.uFar.value = camera.far;
     comp.uniforms.uPx.value = 2 * curHalf / ph;
     comp.uniforms.uLW.value = P.lineWidth * dpr * .5;
+    const pxPerM = ph / (2 * curHalf);
+    U.ptSize.value = clamp(.034 * pxPerM * values.pointSize, 1.3 * dpr * .5, 4.2 * dpr * values.pointSize);
+    if (cloud) { airStream.size.value = clamp(.11 * pxPerM, 2 * dpr * .5, 9 * dpr); flowStream.size.value = clamp(.13 * pxPerM, 2.4 * dpr * .5, 10 * dpr); }
+  }
+  /* point-cloud mode: meshes still cast shadows and take the pointer, but only their dots are drawn */
+  let cloud = null, cloudDensity = 0, airStream = null, flowStream = null;
+  const points = () => values.render === "points";
+  function applyRender() {
+    const pm = points();
+    if (pm && (!cloud || cloudDensity !== values.density)) {
+      if (cloud) for (const c of cloud.clouds) { c.parent.remove(c); c.geometry.dispose(); }
+      cloudDensity = values.density;
+      rawColour(() => { cloud = buildCloud(ctx, [train.root, stage.root], clamp(values.density, .1, 4)); });
+      if (!airStream) {
+        airStream = buildStreams(train.airCurves, U.air, train.airA, { per: 120, seed: 5 });
+        flowStream = buildStreams(train.flowCurves, U.flow, train.flowA, { per: 140, seed: 9, depthTest: false });
+        scene.add(airStream.pts, flowStream.pts);
+      }
+      hooks.onCloud && hooks.onCloud({ points: cloud.total, area: cloud.area });
+    }
+    for (const m of tracked) if (m.userData && m.userData.toonArgs && !m.userData.toonArgs.o.points) { m.colorWrite = !pm; m.depthWrite = !pm; }
+    if (cloud) for (const c of cloud.clouds) c.visible = pm;
+    if (airStream) { airStream.pts.visible = pm; flowStream.pts.visible = pm; }
+    train.opt.tubes = !pm;
   }
 
   const startClock = () => CHAPTERS[clamp(Math.round(Number(values.start) || 0), 0, CHAPTERS.length - 1)].t0 + .001;
@@ -5590,6 +5759,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     cutC = on ? lerp(1.9, .06, smoother(S.cutaway)) : 1e3;
     shellPlane.normal.set(0, 0, -cutSide);
     shellPlane.constant = cutC;
+    U.cutN.value.set(0, 0, cutSide); U.cutC.value = cutC;
   }
   function tick(dt) {
     wall += dt; lastDt = dt;
@@ -5599,11 +5769,28 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     followFilm(S, dt === 0);
     updateCut();
     rawColour(() => { train.apply(S); stage.update(S, wall); });
+    U.scatter.value = Math.pow(S.explode, 1.6) * 2.4;
+    U.scanX.value = lerp(-CAR_PITCH - CAR_H - 3, CAR_PITCH + CAR_H + 3, S.scan);
+    U.scanA.value = sstep(0, .04, S.scan) * (1 - sstep(.96, 1, S.scan));
+    if (cloud) {
+      const pm = points();
+      airStream.pts.visible = pm && train.airA.value > .01; flowStream.pts.visible = pm && train.flowA.value > .01;
+      airStream.update(dt, -(8 + S.speed / 3.6 * .6));
+      flowStream.update(dt, (S.power < -.05 ? -1 : 1) * (5 + 6 * Math.abs(S.power)));
+    }
     if (hl.visible && hl.userData.src) { hl.userData.src.updateWorldMatrix(true, false); hl.matrix.copy(hl.userData.src.matrixWorld); hl.matrixWorld.copy(hl.matrix); }
   }
   const swapped = [];
   function render() {
     placeCamera();
+    if (points()) {
+      comp.uniforms.uLW.value = 0;
+      camera.layers.enable(1);
+      renderer.setClearColor(U.bg.value, 1);
+      renderer.setRenderTarget(rtColour); renderer.clear(); renderer.render(scene, camera);
+      renderer.setRenderTarget(null); renderer.render(compScene, compCam);
+      return;
+    }
     camera.layers.set(0);
     scene.traverseVisible(o => { if (o.isMesh && o.layers.mask & 1) { swapped.push(o, o.material); o.material = o.userData.nmat || normalMat; } });
     renderer.setRenderTarget(rtNormal);
@@ -5724,6 +5911,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     if (ch("labels")) view.callouts = values.labels ? 1 : 0;
     stage.root.visible = !!values.ground;
     stage.setPlatform(values.platform);
+    if (ch("render") || (points() && ch("density"))) applyRender();
     setCursor();
     if (paused || hooks.frozen) { tick(0); render(); overlay?.frame(); }
   }
@@ -5793,6 +5981,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
       return { x: (p.x * .5 + .5) * W, y: (-p.y * .5 + .5) * H };
     },
     status: () => status(S),
+    get cloud() { return cloud && { points: cloud.total, area: cloud.area }; },
     debug: { scene, camera, renderer, canvas, comp, step: dt => { tick(dt); render(); }, frame: () => render(), eased, view },
     dispose() {
       cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); overlay?.dispose();
@@ -5806,6 +5995,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   };
   applyColours(); applySun();
   stage.root.visible = !!values.ground; stage.setPlatform(values.platform);
+  if (points()) applyRender();
   setCursor(); resize(); tick(0); render();
   overlay = buildOverlay(host, () => api, () => values);
   if (!hooks.manual && !hooks.frozen) raf = requestAnimationFrame(loop);
