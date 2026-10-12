@@ -174,3 +174,13 @@ const LABELS = [
   [59, 70, "IBRAHIM LODI", "Sultan of Delhi", "ibrahim"],
   [70.6, 79, "IBRAHIM LODI KILLED", "", "ibrahim"]
 ];
+
+/* the hero of each beat: everything else steps back. [from, to, unit ids] */
+const HEROES = [
+  [12.5, 19, ["bGuns"]],
+  [19, 37, ["lEle", "lVan", "lCentre", "lRight", "lLeft", "lRear"]],
+  [37, 41, ["bGuns"]],
+  [41, 47, ["lEle"]],
+  [47, 59, ["bTulR", "bTulL", "bRight", "bLeft"]],
+  [69, 77, ["lCentre"]]
+];

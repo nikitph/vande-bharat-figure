@@ -7,9 +7,9 @@ The First Battle of Panipat, 21 April 1526 (Babur against Ibrahim Lodi), as an a
 
 ![Guns at the cart line](docs/diorama-guns.png)
 
-| Tulughma: the flanking sweeps | Point-cloud version |
+| Ibrahim Lodi's host, in morning haze | Point-cloud version |
 | --- | --- |
-| ![Tulughma](docs/diorama-tulughma.png) | ![Point cloud](docs/points-guns.png) |
+| ![Lodi's host](docs/diorama-tulughma.png) | ![Point cloud](docs/points-guns.png) |
 
 ## The film
 
@@ -40,6 +40,8 @@ build.py          builds panipat-diorama.js and panipat-points.js
 ```
 
 The diorama reuses the train's material code (`../src/01-core.js`) and theme table, so run `python3 build.py` from this folder after changing either.
+
+The visual rules behind the diorama are collected in [CRAFT.md](CRAFT.md).
 
 ## Accuracy
 

@@ -4,7 +4,8 @@ const PAINT_LIST = [
   ["skin", "Faces", "#b98a66"], ["metal", "Weapons and guns", "#4d5258"], ["horse", "Babur's horses", "#b9ab95"], ["horseL", "Lodi's horses", "#7d5236"], ["elephant", "Elephants", "#8d8984"], ["parasol", "Royal parasol", "#e0b43c"],
   ["soil", "Plain", "#cdbd96"], ["earth", "Cut earth", "#9a7b5a"], ["field", "Green fields", "#a8b676"], ["field2", "Ripe fields", "#d2bd7c"], ["road", "Road", "#e2d3ad"],
   ["house", "Houses", "#d9c5a2"], ["townWall", "Town wall", "#c4a77f"], ["ditch", "Ditch", "#6b5a46"], ["trunk", "Trunks and logs", "#6b5238"], ["foliage", "Trees", "#6f8f4a"],
-  ["cart", "Carts", "#9a7448"], ["wheel", "Wheels", "#4f3d2c"], ["rope", "Ropes", "#cdb98c"]
+  ["cart", "Carts", "#9a7448"], ["wheel", "Wheels", "#4f3d2c"], ["rope", "Ropes", "#cdb98c"],
+  ["baburFlag", "Babur's banners", "#f1e8cf"], ["lodiFlag", "Lodi's banners", "#e6a432"], ["bund", "Field bunds", "#b8a47c"], ["shrub", "Scrub", "#7f9458"], ["grass", "Grass tufts", "#a9ad74"], ["thatch", "Thatch", "#b89a5f"]
 ];
 const PAINTS = Object.fromEntries(PAINT_LIST.map(([k, , c]) => [k, c]));
 function themeValues(id) {
@@ -14,7 +15,7 @@ function themeValues(id) {
 const DEFAULTS = {
   theme: "colour", ...themeValues("colour"), ...PAINTS,
   play: true, speed: 1, start: "0", filmCamera: true, labels: true, captions: true, arrows: true, gait: true,
-  lineWidth: 1.1, sunFrom: 320, sunHeight: 42, ambient: .3
+  lineWidth: 1.1, sunFrom: 340, sunHeight: 27, ambient: .34, haze: .5
 };
 function coerce(raw) {
   const out = {};
@@ -78,7 +79,7 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
   const sceneU = { uFilm: { value: 0 }, uCarts: { value: 0 }, uArrows: { value: 0 }, uFallen: { value: 0 } };
   const ctx = {
     U, figU, sceneU, track, count: 0,
-    mat: (fam, color) => { const k = fam + "|" + color; if (!cache.has(k)) cache.set(k, track(toon(U, fam, { color }))); return cache.get(k); }
+    mat: (fam, color) => { const k = fam + "|" + color; if (!cache.has(k)) cache.set(k, track(ptoon(U, fam, { color }))); return cache.get(k); }
   };
   let armies, terrain, carts, puffs, sticks, fallen, ribbons, parasol;
   rawColour(() => {
@@ -92,10 +93,10 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
   rtNormal.depthTexture = new T.DepthTexture(4, 4, T.FloatType);
   const normalMat = new T.MeshNormalMaterial({ side: T.DoubleSide });
   const comp = new T.ShaderMaterial({
-    uniforms: { tColor: { value: rtColour.texture }, tNormal: { value: rtNormal.texture }, tDepth: { value: rtNormal.depthTexture }, uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 } },
+    uniforms: { tColor: { value: rtColour.texture }, tNormal: { value: rtNormal.texture }, tDepth: { value: rtNormal.depthTexture }, uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 }, uHazeN: { value: 200 }, uHazeF: { value: 2000 }, uHaze: ATMOS.uHaze },
     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
     fragmentShader: `
-      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW; uniform vec3 uInk;
+      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW, uHazeN, uHazeF, uHaze; uniform vec3 uInk;
       varying vec2 vUv;
       float D(vec2 uv){ return uNear + texture2D(tDepth, uv).x * (uFar - uNear); }
       vec3 N(vec2 uv){ return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
@@ -108,7 +109,7 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
         float dn = max(max(1.0 - dot(nc, N(uv - vec2(o.x, 0.0))), 1.0 - dot(nc, N(uv + vec2(o.x, 0.0)))), max(1.0 - dot(nc, N(uv + vec2(0.0, o.y))), 1.0 - dot(nc, N(uv - vec2(0.0, o.y)))));
         return max(eD, smoothstep(0.22, 0.40, dn));
       }
-      void main(){ vec3 col = texture2D(tColor, vUv).rgb; vec2 o = uTexel * uLW; float e = uLW > 0.0 ? edgeAt(vUv, o) : 0.0; gl_FragColor = vec4(mix(col, uInk, e * uInkA), 1.0); }`,
+      void main(){ vec3 col = texture2D(tColor, vUv).rgb; vec2 o = uTexel * uLW; float e = uLW > 0.0 ? edgeAt(vUv, o) : 0.0; e *= 1.0 - smoothstep(uHazeN, uHazeF, D(vUv) - 5000.0) * uHaze * 0.85; gl_FragColor = vec4(mix(col, uInk, e * uInkA), 1.0); }`,
     depthTest: false, depthWrite: false
   });
   const compScene = new T.Scene, compCam = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -123,6 +124,7 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
     for (const [k, list] of registry) for (const e of list) e.f(values[k], e.out);
     hexTo(values.babur, U.baburC.value); hexTo(values.lodi, U.lodiC.value);
     U.ambient.value = values.ambient;
+    ATMOS.uHazeC.value.copy(U.bg.value).lerp(U.mark.value, .25); ATMOS.uHaze.value = values.haze;
     figU.uGait.value = values.gait ? 1 : 0;
   }
 
@@ -142,7 +144,7 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
   let film = hooks.film ?? values.filmCamera, filmBlend = null;
   const startClock = () => CHAPTERS[clamp(Math.round(Number(values.start) || 0), 0, CHAPTERS.length - 1)].t0 + .001;
   let clock = hooks.t ?? startClock(), wall = 0, paused = !!hooks.paused || !values.play, S = filmState(clock), chapter = -1, jump = null;
-  const units = UNITS.map(() => null), portrait = () => W / H < .9;
+  const units = UNITS.map(() => null), focus = UNITS.map(() => 1), portrait = () => W / H < .9;
   const ibrahimPos = () => { const u = units[UNIT_INDEX.lCentre]; return [u.x + 30, u.z - u.d * .25]; };
 
   function tick(dt) {
@@ -161,7 +163,9 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
       const o = unitAt(u, clock);
       if (o.mv > .01) { const n = unitAt(u, clock + .25), dx = n.x - o.x, dz = n.z - o.z; if (dx * dx + dz * dz > .01) o.h = angLerp(o.h, Math.atan2(dx, dz) / DEG, o.mv); }
       units[i] = o;
-      uA.set([o.x, o.z, o.h * DEG, o.a], i * 4); uB.set([o.w, o.d, o.pace, o.chaos], i * 4); uC.set([o.loss, u.side, 0, 0], i * 4);
+      const hero = HEROES.find(h => clock >= h[0] && clock < h[1]), want = !hero || hero[2].includes(u.id) ? 1 : 0;
+      focus[i] = dt === 0 ? want : focus[i] + (want - focus[i]) * Math.min(1, dt * 2.2);
+      uA.set([o.x, o.z, o.h * DEG, o.a], i * 4); uB.set([o.w, o.d, o.pace, o.chaos], i * 4); uC.set([o.loss, u.side, focus[i], 0], i * 4);
     });
     figU.uTime.value = wall;
     sceneU.uFilm.value = clock; sceneU.uCarts.value = S.carts * 1.02 - .01; sceneU.uArrows.value = S.arrows; sceneU.uFallen.value = S.fallen;
@@ -196,6 +200,7 @@ function createPanipatDiorama(host, initial = {}, hooks = {}) {
     camera.updateProjectionMatrix();
     comp.uniforms.uNear.value = camera.near; comp.uniforms.uFar.value = camera.far;
     comp.uniforms.uPx.value = 2 * halfH / ph; comp.uniforms.uLW.value = values.lineWidth * dpr * .5;
+    ATMOS.uHazeNear.value = halfH * .35; ATMOS.uHazeFar.value = halfH * 3.2; comp.uniforms.uHazeN.value = halfH * .35; comp.uniforms.uHazeF.value = halfH * 3.2;
     // the shadow map follows the view so close-ups get crisp shadows
     const sa = values.sunFrom * DEG, sh = clamp(values.sunHeight, 5, 89) * DEG;
     const sd = new T.Vector3(-Math.cos(sh) * Math.cos(sa), Math.sin(sh), Math.cos(sh) * Math.sin(sa));

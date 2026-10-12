@@ -4346,6 +4346,16 @@ const LABELS = [
   [70.6, 79, "IBRAHIM LODI KILLED", "", "ibrahim"]
 ];
 
+/* the hero of each beat: everything else steps back. [from, to, unit ids] */
+const HEROES = [
+  [12.5, 19, ["bGuns"]],
+  [19, 37, ["lEle", "lVan", "lCentre", "lRight", "lLeft", "lRear"]],
+  [37, 41, ["bGuns"]],
+  [41, 47, ["lEle"]],
+  [47, 59, ["bTulR", "bTulL", "bRight", "bLeft"]],
+  [69, 77, ["lCentre"]]
+];
+
 /* ---------- figure templates: points in a figure's own frame (y up, facing +z) ---------- */
 // each point carries aLeg = (phase offset or -1, hip height, pivot z) so the shader can swing legs
 function template(kind) {

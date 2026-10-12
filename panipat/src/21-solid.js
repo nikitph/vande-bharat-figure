@@ -6,11 +6,32 @@ float groundH(vec2 p){ return 1.6 * sin(p.x * .0021 + .4) * sin(p.y * .0017 + 1.
 const FIG_SCALE = 2.2;      // figures are drawn larger than life so they read at battlefield scale, as on a wargames table
 const FIG_SHARE = .5;       // and there are fewer of them: each stands for more men
 
+
+/* ----- atmosphere: haze with distance, and a muted look for whatever the beat is not about ----- */
+const ATMOS = { uHazeNear: { value: 200 }, uHazeFar: { value: 2000 }, uHaze: { value: .55 }, uFocusDepth: { value: 5000 }, uHazeC: { value: new T.Color(.9, .9, .9) } };
+function finish(m) {
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    if (prev) prev.call(m, sh, r);
+    Object.assign(sh.uniforms, ATMOS);
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform float uHazeNear, uHazeFar, uHaze, uFocusDepth; uniform vec3 uHazeC;")
+      .replace("gl_FragColor = vec4(col, 1.0);", `/*FOCUS*/
+      { float dz_ = vViewPosition.z - uFocusDepth; col = mix(col, uHazeC, smoothstep(uHazeNear, uHazeFar, dz_) * uHaze); }
+      gl_FragColor = vec4(col, 1.0);`);
+  };
+  const pk = m.customProgramCacheKey && m.customProgramCacheKey.bind(m);
+  m.customProgramCacheKey = () => "atm:" + (pk ? pk() : "");
+  return m;
+}
+const ptoon = (U, fam, o) => finish(toon(U, fam, o));
+
 /* ----- animated figures: every vertex is placed by its unit's state, entirely on the GPU ----- */
 const FIG_DECL = `
 attribute vec3 aLeg; attribute float aUnit; attribute vec2 aSlot; attribute vec3 aSeed;
 uniform vec4 uA[${NU}], uB[${NU}], uC[${NU}];
 uniform float uTime, uGait, uFig;
+varying float vFocus;
 ${GLSL_GROUND}
 vec2 rot2(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c * p.x - s * p.y, s * p.x + c * p.y); }
 struct Fig { vec2 wp; float hd; float dead; float ph; float go; float vis; float flip; };
@@ -31,6 +52,7 @@ Fig figState(){
   return F;
 }
 vec3 figApply(vec3 p, Fig F, bool isPoint){
+  if (aLeg.x < -1.5 && isPoint) { float d = max(0.0, -p.z); p.x += sin(uTime * 5.0 + d * 2.4 + aSeed.x * 20.0) * 0.14 * d; }
   if (aLeg.x >= 0.0) {
     float a = sin(F.ph + aLeg.x) * 0.42 * min(F.go, 1.4);
     vec2 piv = isPoint ? vec2(aLeg.z, aLeg.y) : vec2(0.0);
@@ -39,7 +61,7 @@ vec3 figApply(vec3 p, Fig F, bool isPoint){
   }
   if (isPoint) p.y += abs(sin(F.ph)) * 0.07 * F.go;
   p.xy = rot2(p.xy, F.dead * 1.45 * F.flip);
-  if (isPoint) { p.y = max(p.y, 0.02); p *= uFig; }
+  if (isPoint) { p.y = max(p.y, 0.02); p *= uFig * (0.9 + 0.5 * aSeed.z); }
   p.xz = rot2(p.xz, -F.hd);
   if (isPoint) {
     p += vec3(F.wp.x, groundH(F.wp), F.wp.y);
@@ -52,7 +74,10 @@ function injectFigure(sh, U) {
   sh.vertexShader = sh.vertexShader
     .replace("#include <common>", "#include <common>\n" + FIG_DECL)
     .replace("#include <beginnormal_vertex>", "#include <beginnormal_vertex>\n{ Fig Fn = figState(); objectNormal = figApply(objectNormal, Fn, false); }")
-    .replace("#include <begin_vertex>", "#include <begin_vertex>\n{ Fig Fv = figState(); transformed = figApply(position, Fv, true); }");
+    .replace("#include <begin_vertex>", "#include <begin_vertex>\n{ Fig Fv = figState(); transformed = figApply(position, Fv, true); vFocus = uC[int(aUnit + 0.5)].z; }");
+  sh.fragmentShader = sh.fragmentShader
+    .replace("#include <common>", "#include <common>\nvarying float vFocus;")
+    .replace("/*FOCUS*/", "{ float g_ = dot(col, vec3(0.3, 0.59, 0.11)); vec3 m_ = mix(mix(col, vec3(g_), 0.75), uHazeC, 0.35); col = mix(m_, col, clamp(vFocus, 0.0, 1.0)); }");
 }
 // wrap any material so it runs the figure transform; the same code drives colour, ink and shadow passes
 function figureMaterial(base, U, key) {
@@ -96,6 +121,9 @@ function figureParts(kind) {
     put("cloth", blk(.36, .55, .26, 0, 2.08, -.05)); put("cloth", stick([.17, 1.85, -.05], [.2, 1.45, .25], .06)); put("cloth", stick([-.17, 1.85, -.05], [-.2, 1.45, .25], .06));
     put("skin", ball(.11, 0, 2.48, 0)); put("cloth", ball(.12, 0, 2.57, 0, 1, .6, 1));
     put("metal", stick([.3, 1.7, -.6], [.34, 3.0, 1.0], .025));
+  } else if (kind === "std") {
+    put("pole", stick([0, 0, 0], [0, 4.4, 0], .05, 6)); put("pole", ball(.1, 0, 4.48, 0));
+    const flag = new T.BoxGeometry(.04, 1.0, 1.5, 1, 1, 8); flag.translate(0, 3.85, -.78); put("flag", flag, [-2, 0, 0]);
   } else {
     put("hide", ball(1, 0, 2.15, 0, 1.05, 1.15, 1.75)); put("hide", ball(.78, 0, 2.7, 1.9));
     put("hide", stick([0, 2.4, 2.45], [0, 1.2, 2.85], .2)); put("hide", stick([0, 1.2, 2.85], [0, .45, 2.6], .12));
@@ -112,7 +140,7 @@ function figureParts(kind) {
 
 /* ----- armies ----- */
 function buildArmies(ctx) {
-  const { mat, U, figU } = ctx, groups = {}, meshes = [];
+  const { mat, U, figU } = ctx, groups = {}, meshes = [], stdBy = {};
   UNITS.forEach((u, ui) => { const k = u.type + ":" + u.side; (groups[k] ||= []).push([u, ui]); });
   for (const [key, list] of Object.entries(groups)) {
     const [type, side] = key.split(":"), r = rng(type.length * 977 + Number(side) * 31 + 5);
@@ -129,6 +157,11 @@ function buildArmies(ctx) {
         unitIdx.push(ui); slots.push(x, y); seeds.push(r(), .02 + r() * .96, r() * .4);
       }
     }
+    // standards: a few banners riding just behind each unit's front
+    for (const [u, ui] of list) {
+      const n = Math.round(u.n * (type === "ele" ? 1 : FIG_SHARE)), k = Math.max(2, Math.min(8, Math.round(n / 140)));
+      for (let i = 0; i < k; i++) (stdBy[side] ||= []).push([ui, ((i + .5) / k - .5) * .8 + (r() - .5) * .05, -.3 + (r() - .5) * .1, .01 + r() * .1, .985, r() * .4]);
+    }
     const parts = figureParts(type), sideCol = side === "0" ? "babur" : "lodi";
     const paintOf = { cloth: sideCol, skin: "skin", metal: "metal", horse: side === "0" ? "horse" : "horseL", hide: "elephant" };
     for (const [part, geo] of Object.entries(parts)) {
@@ -139,13 +172,31 @@ function buildArmies(ctx) {
       g.setAttribute("aSeed", new T.InstancedBufferAttribute(new Float32Array(seeds), 3));
       g.instanceCount = unitIdx.length;
       const k = `${type}-${part}-${side}`;
-      const m = mesh(g, figureMaterial(toon(U, part === "cloth" ? "body" : "deck", { color: paintOf[part], forcePaint: true }), figU, k), true, true);
+      const m = mesh(g, figureMaterial(ptoon(U, part === "cloth" ? "body" : "deck", { color: paintOf[part], forcePaint: true }), figU, k), true, true);
       m.frustumCulled = false;
       m.userData.nmat = figureMaterial(new T.MeshNormalMaterial(), figU, k + "-n");
       m.customDepthMaterial = figureMaterial(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), figU, k + "-d");
       ctx.track(m.material); ctx.track(m.userData.nmat); ctx.track(m.customDepthMaterial);
       meshes.push(m);
       ctx.count += unitIdx.length;
+    }
+  }
+  for (const side of Object.keys(stdBy)) {
+    const rows = stdBy[side], parts = figureParts("std");
+    for (const [part, geo] of Object.entries(parts)) {
+      const g = new T.InstancedBufferGeometry();
+      g.setAttribute("position", geo.attributes.position); g.setAttribute("normal", geo.attributes.normal); g.setAttribute("aLeg", geo.attributes.aLeg);
+      g.setAttribute("aUnit", new T.InstancedBufferAttribute(new Float32Array(rows.map(q => q[0])), 1));
+      g.setAttribute("aSlot", new T.InstancedBufferAttribute(new Float32Array(rows.flatMap(q => [q[1], q[2]])), 2));
+      g.setAttribute("aSeed", new T.InstancedBufferAttribute(new Float32Array(rows.flatMap(q => [q[3], q[4], q[5]])), 3));
+      g.instanceCount = rows.length;
+      const k = `std-${part}-${side}`, color = part === "pole" ? "trunk" : side === "0" ? "baburFlag" : "lodiFlag";
+      const m = mesh(g, figureMaterial(ptoon(U, part === "pole" ? "dark" : "mark", { color, forcePaint: true, side: T.DoubleSide }), figU, k), true, true);
+      m.frustumCulled = false;
+      m.userData.nmat = figureMaterial(new T.MeshNormalMaterial({ side: T.DoubleSide }), figU, k + "-n");
+      m.customDepthMaterial = figureMaterial(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), figU, k + "-d");
+      ctx.track(m.material);
+      meshes.push(m);
     }
   }
   return meshes;
@@ -166,18 +217,29 @@ function buildTerrain(ctx) {
   const wall = (pts) => { const P = [], idx = []; pts.forEach(([x, z], i) => { P.push(x, groundH(x, z), z, x, SLAB.base, z); if (i) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }); const w = new T.BufferGeometry; w.setAttribute("position", new T.Float32BufferAttribute(P, 3)); w.setIndex(idx); w.computeVertexNormals(); return w; };
   const edge = (a, b, n = 120) => [...Array(n + 1)].map((_, i) => [lerp(a[0], b[0], i / n), lerp(a[1], b[1], i / n)]);
   sides.push(wall(edge([SLAB.x0, SLAB.z0], [SLAB.x1, SLAB.z0])), wall(edge([SLAB.x1, SLAB.z0], [SLAB.x1, SLAB.z1])), wall(edge([SLAB.x1, SLAB.z1], [SLAB.x0, SLAB.z1])), wall(edge([SLAB.x0, SLAB.z1], [SLAB.x0, SLAB.z0])));
-  root.add(mesh(merge(sides), toon(U, "deck", { color: "earth", strata: 9, side: T.DoubleSide }), false, true));
+  root.add(mesh(merge(sides), ptoon(U, "deck", { color: "earth", strata: 9, side: T.DoubleSide }), false, true));
   // field patches, draped on the ground
   const patch = (cx, cz, w, d, a, lift = .6) => {
     const pg = new T.PlaneGeometry(w, d, Math.max(2, Math.round(w / 12)), Math.max(2, Math.round(d / 12))); pg.rotateX(-Math.PI / 2); pg.rotateY(a); pg.translate(cx, 0, cz);
     const q = pg.attributes.position; for (let i = 0; i < q.count; i++) q.setY(i, groundH(q.getX(i), q.getZ(i)) + lift);
     pg.computeVertexNormals(); return pg;
   };
-  const f1 = [], f2 = [];
-  for (let i = 0; i < 150; i++) {
-    const cx = lerp(SLAB.x0 + 150, SLAB.x1 - 150, r()), cz = lerp(SLAB.z0 + 150, SLAB.z1 - 150, r());
-    if (Math.hypot(cx + 1150, cz - 110) < 380 || (Math.abs(cx) < 900 && cz > -900 && cz < 120)) continue;
-    const ripe = r() < .45; (ripe ? f2 : f1).push(patch(cx, cz, 80 + r() * 160, 60 + r() * 120, (r() - .5) * .5, ripe ? 1.0 : .6));
+  // fields come in blocks of aligned plots round the villages, the way a plain is actually farmed
+  const f1 = [], f2 = [], fieldRects = [], blocks = [];
+  const clear = (x, z, rad) => !(Math.hypot(x + 1150, z - 110) < 330 + rad) && !(Math.abs(x) < 1000 + rad * .3 && z > -1750 && z < 330) && blocks.every(([bx, bz, br]) => Math.hypot(x - bx, z - bz) > br + rad + 25);
+  const seeds = [[-1750, -1450], [1250, -1750], [1300, 380], [-450, -2150], [-1850, 420], [-1500, -600], [1450, -900], [700, -2150], [-1100, -2000], [1500, -300]];
+  for (let tries = 0; tries < 1200 && blocks.length < 48; tries++) {
+    const base = seeds[tries % seeds.length], x = base[0] + (r() - .5) * 700, z = base[1] + (r() - .5) * 600;
+    const nx = 2 + Math.floor(r() * 4), nz = 2 + Math.floor(r() * 3), pw = 45 + r() * 40, pd = 40 + r() * 35, rad = Math.hypot(nx * pw, nz * pd) / 2;
+    if (x - rad < SLAB.x0 + 30 || x + rad > SLAB.x1 - 30 || z - rad < SLAB.z0 + 30 || z + rad > SLAB.z1 - 30 || !clear(x, z, rad)) continue;
+    blocks.push([x, z, rad]);
+    const a = (r() - .5) * .6, c = Math.cos(a), sn = Math.sin(a);
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+      const u = (i - (nx - 1) / 2) * pw, v = (j - (nz - 1) / 2) * pd, cx = x + u * c + v * sn, cz = z - u * sn + v * c, kind = r();
+      if (kind < .14) continue;
+      fieldRects.push([cx, cz, pw - 3, pd - 3, a]);
+      (kind < .55 ? f1 : f2).push(patch(cx, cz, pw - 3, pd - 3, a, kind < .55 ? .6 : 1.0));
+    }
   }
   root.add(mesh(merge(f1), mat("deck", "field"), false, true), mesh(merge(f2), mat("deck", "field2"), false, true));
   // road south to Delhi
@@ -222,6 +284,38 @@ function buildTerrain(ctx) {
     }
   }
   root.add(mesh(merge(logs.concat(trunks)), mat("dark", "trunk")), mesh(merge(crowns), mat("deck", "foliage")));
+  // low earth bunds round the fields, so the patchwork reads as farmland
+  const bunds = [];
+  for (const [cx, cz, w, d, a] of fieldRects) {
+    const c = Math.cos(a), sn = Math.sin(a), pt = (u, v) => [cx + u * c + v * sn, cz - u * sn + v * c];
+    const P4 = [pt(-w / 2, -d / 2), pt(w / 2, -d / 2), pt(w / 2, d / 2), pt(-w / 2, d / 2)];
+    for (let i = 0; i < 4; i++) { const A = P4[i], B = P4[(i + 1) % 4]; bunds.push(stick([A[0], groundH(A[0], A[1]) + 1.1, A[1]], [B[0], groundH(B[0], B[1]) + 1.1, B[1]], .7, 4)); }
+  }
+  root.add(mesh(merge(bunds), mat("deck", "bund"), false, true));
+  // scrub: thick at the margins and along field edges, thin where the armies trample
+  const shrubs = [], tufts = [];
+  for (let i = 0; i < 9000; i++) {
+    const x = lerp(SLAB.x0 + 20, SLAB.x1 - 20, r()), z = lerp(SLAB.z0 + 20, SLAB.z1 - 20, r());
+    const busy = Math.abs(x) < 1000 && z > -1700 && z < 320, town = Math.hypot(x + 1150, z - 110) < 320;
+    if (town || (busy && r() < .8)) continue;
+    const big = r() < .3, sz = big ? 1.6 + r() * 1.6 : .8 + r() * .8, b = new T.IcosahedronGeometry(sz, 0);
+    b.scale(1.2, .65, 1.1); b.rotateY(r() * 3); b.translate(x, groundH(x, z) + sz * .35, z);
+    (big ? shrubs : tufts).push(b);
+  }
+  root.add(mesh(merge(shrubs), mat("deck", "shrub"), true, true), mesh(merge(tufts), mat("deck", "grass"), false, true));
+  // hamlets out on the plain: huts with thatched roofs round a well and a shade tree
+  const hutWalls = [], thatch = [], wells = [], shade = [];
+  for (const [hx, hz, n] of [[-1750, -1450, 14], [1250, -1750, 11], [1300, 380, 9], [-450, -2150, 12], [-1850, 420, 8]]) {
+    for (let i = 0; i < n; i++) {
+      const a = i / n * 6.28 + r() * .4, rad = 28 + r() * 30, x = hx + Math.cos(a) * rad, z = hz + Math.sin(a) * rad, w = 6 + r() * 5, d = 5 + r() * 4, h = 3 + r() * 1.2, y = groundH(x, z), ry = -a + Math.PI / 2;
+      const b = new T.BoxGeometry(w, h, d); b.rotateY(ry); b.translate(x, y + h / 2, z); hutWalls.push(b);
+      const t = new T.ConeGeometry(Math.max(w, d) * .75, 3 + r(), 4); t.rotateY(Math.PI / 4); t.scale(1, 1, d / w); t.rotateY(ry); t.translate(x, y + h + 1.6, z); thatch.push(t);
+    }
+    const y0 = groundH(hx, hz), wl = new T.CylinderGeometry(2.6, 2.8, 1.4, 14); wl.translate(hx, y0 + .7, hz); wells.push(wl);
+    wells.push(stick([hx + 12, y0, hz - 8], [hx + 12, y0 + 8, hz - 8], .8, 6));
+    const tr = new T.IcosahedronGeometry(7, 0); tr.translate(hx + 12, y0 + 11, hz - 8); shade.push(tr);
+  }
+  root.add(mesh(merge(hutWalls), mat("body", "house")), mesh(merge(thatch), mat("deck", "thatch")), mesh(merge(wells), mat("dark", "trunk")), mesh(merge(shade), mat("deck", "foliage")));
   return root;
 }
 // carts and guns appear west to east as the line is built
@@ -245,7 +339,7 @@ function buildCarts(ctx) {
     for (const s of [-1, 1]) wheels.push(withOrder((() => { const w = new T.CylinderGeometry(.6, .6, .15, 12); w.rotateZ(Math.PI / 2); w.translate(gx + s * .7, y + .6, .5); return w; })(), k));
   }
   const nmat = wrap(new T.MeshNormalMaterial({ side: T.DoubleSide }), "n");
-  const make = (list, fam, color, key) => { const m = mesh(mergeGeometries(list, false), wrap(toon(U, fam, { color }), key)); m.userData.nmat = nmat; m.customDepthMaterial = wrap(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), key + "d"); ctx.track(m.material); return m; };
+  const make = (list, fam, color, key) => { const m = mesh(mergeGeometries(list, false), wrap(ptoon(U, fam, { color }), key)); m.userData.nmat = nmat; m.customDepthMaterial = wrap(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), key + "d"); ctx.track(m.material); return m; };
   return [make(wood, "body", "cart", "w"), make(wheels, "dark", "wheel", "h"), make(guns, "dark", "metal", "g"), make(ropes, "mark", "rope", "r")];
 }
 
@@ -365,7 +459,7 @@ function buildFallen(ctx) {
       .replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed.xz = rotB(transformed.xz, aBody.z); transformed += vec3(aBody.x, groundH(aBody.xy), aBody.y); if (aBody.w > uFallen) transformed.y -= 900.0;");
   };
   const wrap = (m, key) => { const prev = m.onBeforeCompile; m.onBeforeCompile = (sh, rr) => { if (prev) prev.call(m, sh, rr); inject(sh); }; const pk = m.customProgramCacheKey && m.customProgramCacheKey.bind(m); m.customProgramCacheKey = () => "fallen:" + key + (pk ? pk() : ""); return m; };
-  const m = mesh(g, wrap(toon(ctx.U, "body", { color: "lodiFallen", forcePaint: true }), "c"), false, true);
+  const m = mesh(g, wrap(ptoon(ctx.U, "body", { color: "lodiFallen", forcePaint: true }), "c"), false, true);
   m.userData.nmat = wrap(new T.MeshNormalMaterial(), "n");
   m.frustumCulled = false; ctx.track(m.material);
   return m;
@@ -398,7 +492,7 @@ function buildRibbons(ctx) {
 }
 // the sultan's parasol, which falls with him
 function buildParasol(ctx) {
-  const g = new T.Group, pole = mesh(stick([0, 0, 0], [0, 9, 0], .12, 6), ctx.mat("dark", "trunk")), canopy = mesh((() => { const c = new T.ConeGeometry(3.4, 1.6, 14, 1, true); c.translate(0, 9.4, 0); return c; })(), toon(ctx.U, "mark", { color: "parasol", side: T.DoubleSide, forcePaint: true }));
+  const g = new T.Group, pole = mesh(stick([0, 0, 0], [0, 9, 0], .12, 6), ctx.mat("dark", "trunk")), canopy = mesh((() => { const c = new T.ConeGeometry(3.4, 1.6, 14, 1, true); c.translate(0, 9.4, 0); return c; })(), ptoon(ctx.U, "mark", { color: "parasol", side: T.DoubleSide, forcePaint: true }));
   ctx.track(canopy.material);
   g.add(pole, canopy);
   return g;
