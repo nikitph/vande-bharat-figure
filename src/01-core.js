@@ -125,7 +125,7 @@ function toon(U, fam, o = {}) {
     });
     if (emis) sh.uniforms.uEmis = emis;
     if (strata) sh.uniforms.uStrata = { value: strata };
-    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost });
+    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost, uPtA: { value: o.ptA ?? .6 } });
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vW;" + (pts ? "\nattribute vec3 aScat; attribute float aJit; attribute float aKeep; varying float vJit; varying float vKeep; uniform float uPt, uScatter;" : ""))
       .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + (pts ? "transformed += aScat * uScatter; vJit = aJit; vKeep = aKeep;\n" : "") + WPOS)
@@ -137,7 +137,7 @@ uniform vec3 uLo, uHi, uInk, uGlow, uCLo, uCHi; uniform float uCMix, uAmb;
 ${emis ? "uniform float uEmis;" : ""}
 ${strata ? "uniform float uStrata;" : ""}
 varying vec3 vW;
-${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost; uniform vec3 uCutN;" : ""}`)
+${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost, uPtA; uniform vec3 uCutN;" : ""}`)
       .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {" + (pts ? `
         vec2 pc_ = gl_PointCoord * 2.0 - 1.0; if (dot(pc_, pc_) > 1.0) discard;
         ${ghost ? "if (dot(vW, uCutN) > uCutC && vKeep > uGhost) discard;" : ""}` : ""))
@@ -157,7 +157,10 @@ ${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, 
         }
       }` : ""}
       ${emis ? "col = mix(col, uGlow, clamp(uEmis, 0.0, 1.0));" : ""}
-      ${pts ? `col *= 0.88 + 0.24 * vJit;
+      ${pts ? `// glow: dim fill, bright silhouettes (the rim stands in for ink lines), summed additively
+      float rim_ = pow(1.0 - abs(normal.z), 2.2);
+      col = col * (0.32 + 0.3 * smoothstep(0.26, 1.0, lum)) + col * rim_ * 1.25;
+      col *= (0.8 + 0.4 * vJit) * uPtA;
       { float band = uScanA * (1.0 - smoothstep(0.0, 1.6, abs(vW.x - uScanX))) ; float trail = uScanA * 0.25 * step(vW.x, uScanX) * (1.0 - smoothstep(0.0, 9.0, uScanX - vW.x));
         col = mix(col, uGlow, clamp(band + trail, 0.0, 0.9)); }` : ""}
       gl_FragColor = vec4(col, 1.0);`);

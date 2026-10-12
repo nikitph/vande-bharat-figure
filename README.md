@@ -14,7 +14,7 @@ It shows three cars of the sixteen — the driving trailer with its nose and cab
 
 ## Point-cloud mode
 
-Set `render="points"` and every surface is resampled into dots (about two million at the default density), with the film, views and options unchanged. Dots can do things lines and solid faces cannot, so this mode adds:
+Set `render="points"` and every surface is resampled into dots (about three million at the default density) that glow on black like an X-ray, with the film, views and options unchanged. Silhouettes are brightened in place of ink lines, the light adds up where surfaces overlap, and the livery colours carry through. Dots can do things lines and solid faces cannot, so this mode adds:
 
 - **Condensing assembly**: parts drift in as loose clouds and settle into shape, while a scan line sweeps the length of the train.
 - **Ghosted cutaway**: instead of cutting the near shell away, it thins to a few percent of its dots, so you see inside without losing the outline.
@@ -22,9 +22,9 @@ Set `render="points"` and every surface is resampled into dots (about two millio
 - **See-through density**: the gaps between dots let seats and equipment show faintly through the body even with the cutaway off.
 - **Heat**: traction motors, the converter and the transformer glow with load (in both modes).
 
-| Assembling (Dark) | Cutaway (Colour) |
+| Cutaway with callouts | Regenerative braking |
 | --- | --- |
-| ![Point-cloud assembly](docs/points-assembly.png) | ![Point-cloud cutaway](docs/points-cutaway.png) |
+| ![Point-cloud cutaway](docs/points-cutaway.png) | ![Point-cloud braking](docs/points-assembly.png) |
 
 `density` scales the point count (0.5 is about a million points; the demo uses that on narrow screens) and `pointSize` scales the dots. Changing `density` resamples, which takes a moment.
 

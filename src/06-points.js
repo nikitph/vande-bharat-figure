@@ -60,7 +60,9 @@ function buildCloud(ctx, roots, density) {
   const pointsMat = src => {
     if (!cache.has(src.uuid)) {
       const { fam, o } = src.userData.toonArgs, shellSrc = !!(src.clippingPlanes && src.clippingPlanes.length === 1);
-      const m = toon(ctx.U, fam, { ...o, points: true, ghost: shellSrc, clip: shellSrc ? undefined : o.clip, side: T.FrontSide });
+      const stage = !!(src.clippingPlanes && src.clippingPlanes.length > 1);
+      const m = toon(ctx.U, fam, { ...o, points: true, ghost: shellSrc, clip: shellSrc ? undefined : o.clip, side: T.FrontSide, ptA: stage ? .11 : .3 });
+      Object.assign(m, { transparent: true, depthWrite: false, blending: T.AdditiveBlending });
       cache.set(src.uuid, ctx.track(m));
     }
     return cache.get(src.uuid);
@@ -70,7 +72,7 @@ function buildCloud(ctx, roots, density) {
     const list = [];
     root.traverse(o => { if (o.isMesh && o.layers.mask === 1 && o.material && o.material.userData && o.material.userData.toonArgs) list.push(o); });
     for (const m of list) {
-      const per = (m.userData.part ? 300 : m.userData.cloud ?? 150) * density, minL = (m.userData.part ? 60 : 45) * density;
+      const per = (m.userData.part ? 420 : m.userData.cloud ?? 150) * density, minL = (m.userData.part ? 60 : 45) * density;
       let parts;
       if (m.isInstancedMesh) {
         parts = [];
@@ -79,7 +81,7 @@ function buildCloud(ctx, roots, density) {
       } else parts = [sampleSurface(m.geometry, per, rand, null, minL)];
       const g = cloudGeometry(parts);
       const pts = new T.Points(g, pointsMat(m.material));
-      pts.receiveShadow = true; pts.castShadow = false; pts.frustumCulled = false;
+      pts.receiveShadow = false; pts.castShadow = false; pts.frustumCulled = false;
       pts.userData.cloud = true;
       m.add(pts);
       clouds.push(pts);

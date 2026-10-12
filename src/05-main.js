@@ -109,6 +109,7 @@ function buildOverlay(host, getFigure, getValues) {
 }
 
 /* ---------- the figure ---------- */
+const POINT_BG = new T.Color(.012, .018, .027);
 function createVandeBharat(host, initial = {}, hooks = {}) {
   let values = mergeValues(DEFAULTS, initial);
   const P = { theme: values.theme, azimuth: values.azimuth, elevation: values.elevation, zoom: values.zoom, focusX: values.focusX, lineWidth: values.lineWidth, speed: values.speed };
@@ -157,11 +158,11 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   const comp = new T.ShaderMaterial({
     uniforms: {
       tColor: { value: rtColour.texture }, tNormal: { value: rtNormal.texture }, tDepth: { value: rtNormal.depthTexture },
-      uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 }
+      uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 }, uTone: { value: 0 }
     },
     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
     fragmentShader: `
-      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW; uniform vec3 uInk;
+      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW, uTone; uniform vec3 uInk;
       varying vec2 vUv;
       float D(vec2 uv){ return uNear + texture2D(tDepth, uv).x * (uFar - uNear); }
       vec3 N(vec2 uv){ return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
@@ -180,6 +181,8 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
       }
       void main(){
         vec3 col = texture2D(tColor, vUv).rgb;
+        // point-cloud mode sums light additively; roll the highlights off instead of clipping them
+        if (uTone > 0.5) col = 1.0 - exp(-col * 1.15);
         vec2 o = uTexel * uLW;
         float e = uLW > 0.0 ? edgeAt(vUv, o) : 0.0;
         gl_FragColor = vec4(mix(col, uInk, e * uInkA), 1.0);
@@ -219,7 +222,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     for (const k of ["head", "cabin", "flow", "air"]) hexTo(values[k], U[k].value);
     hexTo(values.heat, U.heatC.value);
     comp.uniforms.uInkA.value = values.inkStrength;
-    U.cmix.value = values.paint ? 1 : 0;
+    U.cmix.value = values.paint || values.render === "points" ? 1 : 0;
     for (const [k, list] of registry) for (const e of list) e.f(values[k], e.out);
     hlMat.color.copy(U.sel.value);
   }
@@ -292,7 +295,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     comp.uniforms.uPx.value = 2 * curHalf / ph;
     comp.uniforms.uLW.value = P.lineWidth * dpr * .5;
     const pxPerM = ph / (2 * curHalf);
-    U.ptSize.value = clamp(.034 * pxPerM * values.pointSize, 1.3 * dpr * .5, 4.2 * dpr * values.pointSize);
+    U.ptSize.value = clamp(.026 * pxPerM * values.pointSize, 1.1 * dpr * .5, 3.2 * dpr * values.pointSize);
     if (cloud) { airStream.size.value = clamp(.11 * pxPerM, 2 * dpr * .5, 9 * dpr); flowStream.size.value = clamp(.13 * pxPerM, 2.4 * dpr * .5, 10 * dpr); }
   }
   /* point-cloud mode: meshes still cast shadows and take the pointer, but only their dots are drawn */
@@ -313,6 +316,8 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     }
     for (const m of tracked) if (m.userData && m.userData.toonArgs && !m.userData.toonArgs.o.points) { m.colorWrite = !pm; m.depthWrite = !pm; }
     if (cloud) for (const c of cloud.clouds) c.visible = pm;
+    ground.visible = !pm;
+    U.cmix.value = pm || values.paint ? 1 : 0;
     if (airStream) { airStream.pts.visible = pm; flowStream.pts.visible = pm; }
     train.opt.tubes = !pm;
   }
@@ -399,13 +404,14 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   function render() {
     placeCamera();
     if (points()) {
-      comp.uniforms.uLW.value = 0;
+      comp.uniforms.uLW.value = 0; comp.uniforms.uTone.value = 1;
       camera.layers.enable(1);
-      renderer.setClearColor(U.bg.value, 1);
+      renderer.setClearColor(POINT_BG, 1);
       renderer.setRenderTarget(rtColour); renderer.clear(); renderer.render(scene, camera);
       renderer.setRenderTarget(null); renderer.render(compScene, compCam);
       return;
     }
+    comp.uniforms.uTone.value = 0;
     camera.layers.set(0);
     scene.traverseVisible(o => { if (o.isMesh && o.layers.mask & 1) { swapped.push(o, o.material); o.material = o.userData.nmat || normalMat; } });
     renderer.setRenderTarget(rtNormal);
@@ -612,7 +618,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   stage.root.visible = !!values.ground; stage.setPlatform(values.platform);
   if (points()) applyRender();
   setCursor(); resize(); tick(0); render();
-  overlay = buildOverlay(host, () => api, () => values);
+  overlay = buildOverlay(host, () => api, () => points() ? { ...values, bg: "#05070b", ink: "#56616b", inkStrength: .8 } : values);
   if (!hooks.manual && !hooks.frozen) raf = requestAnimationFrame(loop);
   return api;
 }

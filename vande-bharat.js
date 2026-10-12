@@ -4224,7 +4224,7 @@ function toon(U, fam, o = {}) {
     });
     if (emis) sh.uniforms.uEmis = emis;
     if (strata) sh.uniforms.uStrata = { value: strata };
-    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost });
+    if (pts) Object.assign(sh.uniforms, { uPt: U.ptSize, uScatter: U.scatter, uScanX: U.scanX, uScanA: U.scanA, uCutN: U.cutN, uCutC: U.cutC, uGhost: U.ghost, uPtA: { value: o.ptA ?? .6 } });
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vW;" + (pts ? "\nattribute vec3 aScat; attribute float aJit; attribute float aKeep; varying float vJit; varying float vKeep; uniform float uPt, uScatter;" : ""))
       .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + (pts ? "transformed += aScat * uScatter; vJit = aJit; vKeep = aKeep;\n" : "") + WPOS)
@@ -4236,7 +4236,7 @@ uniform vec3 uLo, uHi, uInk, uGlow, uCLo, uCHi; uniform float uCMix, uAmb;
 ${emis ? "uniform float uEmis;" : ""}
 ${strata ? "uniform float uStrata;" : ""}
 varying vec3 vW;
-${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost; uniform vec3 uCutN;" : ""}`)
+${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, uCutC, uGhost, uPtA; uniform vec3 uCutN;" : ""}`)
       .replace("void main() {", "#include <shadowmask_pars_fragment>\nvoid main() {" + (pts ? `
         vec2 pc_ = gl_PointCoord * 2.0 - 1.0; if (dot(pc_, pc_) > 1.0) discard;
         ${ghost ? "if (dot(vW, uCutN) > uCutC && vKeep > uGhost) discard;" : ""}` : ""))
@@ -4256,7 +4256,10 @@ ${pts ? "varying float vJit; varying float vKeep; uniform float uScanX, uScanA, 
         }
       }` : ""}
       ${emis ? "col = mix(col, uGlow, clamp(uEmis, 0.0, 1.0));" : ""}
-      ${pts ? `col *= 0.88 + 0.24 * vJit;
+      ${pts ? `// glow: dim fill, bright silhouettes (the rim stands in for ink lines), summed additively
+      float rim_ = pow(1.0 - abs(normal.z), 2.2);
+      col = col * (0.32 + 0.3 * smoothstep(0.26, 1.0, lum)) + col * rim_ * 1.25;
+      col *= (0.8 + 0.4 * vJit) * uPtA;
       { float band = uScanA * (1.0 - smoothstep(0.0, 1.6, abs(vW.x - uScanX))) ; float trail = uScanA * 0.25 * step(vW.x, uScanX) * (1.0 - smoothstep(0.0, 9.0, uScanX - vW.x));
         col = mix(col, uGlow, clamp(band + trail, 0.0, 0.9)); }` : ""}
       gl_FragColor = vec4(col, 1.0);`);
@@ -5316,7 +5319,9 @@ function buildCloud(ctx, roots, density) {
   const pointsMat = src => {
     if (!cache.has(src.uuid)) {
       const { fam, o } = src.userData.toonArgs, shellSrc = !!(src.clippingPlanes && src.clippingPlanes.length === 1);
-      const m = toon(ctx.U, fam, { ...o, points: true, ghost: shellSrc, clip: shellSrc ? undefined : o.clip, side: T.FrontSide });
+      const stage = !!(src.clippingPlanes && src.clippingPlanes.length > 1);
+      const m = toon(ctx.U, fam, { ...o, points: true, ghost: shellSrc, clip: shellSrc ? undefined : o.clip, side: T.FrontSide, ptA: stage ? .11 : .3 });
+      Object.assign(m, { transparent: true, depthWrite: false, blending: T.AdditiveBlending });
       cache.set(src.uuid, ctx.track(m));
     }
     return cache.get(src.uuid);
@@ -5326,7 +5331,7 @@ function buildCloud(ctx, roots, density) {
     const list = [];
     root.traverse(o => { if (o.isMesh && o.layers.mask === 1 && o.material && o.material.userData && o.material.userData.toonArgs) list.push(o); });
     for (const m of list) {
-      const per = (m.userData.part ? 300 : m.userData.cloud ?? 150) * density, minL = (m.userData.part ? 60 : 45) * density;
+      const per = (m.userData.part ? 420 : m.userData.cloud ?? 150) * density, minL = (m.userData.part ? 60 : 45) * density;
       let parts;
       if (m.isInstancedMesh) {
         parts = [];
@@ -5335,7 +5340,7 @@ function buildCloud(ctx, roots, density) {
       } else parts = [sampleSurface(m.geometry, per, rand, null, minL)];
       const g = cloudGeometry(parts);
       const pts = new T.Points(g, pointsMat(m.material));
-      pts.receiveShadow = true; pts.castShadow = false; pts.frustumCulled = false;
+      pts.receiveShadow = false; pts.castShadow = false; pts.frustumCulled = false;
       pts.userData.cloud = true;
       m.add(pts);
       clouds.push(pts);
@@ -5494,6 +5499,7 @@ function buildOverlay(host, getFigure, getValues) {
 }
 
 /* ---------- the figure ---------- */
+const POINT_BG = new T.Color(.012, .018, .027);
 function createVandeBharat(host, initial = {}, hooks = {}) {
   let values = mergeValues(DEFAULTS, initial);
   const P = { theme: values.theme, azimuth: values.azimuth, elevation: values.elevation, zoom: values.zoom, focusX: values.focusX, lineWidth: values.lineWidth, speed: values.speed };
@@ -5542,11 +5548,11 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   const comp = new T.ShaderMaterial({
     uniforms: {
       tColor: { value: rtColour.texture }, tNormal: { value: rtNormal.texture }, tDepth: { value: rtNormal.depthTexture },
-      uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 }
+      uTexel: { value: new T.Vector2 }, uNear: { value: 1 }, uFar: { value: 4000 }, uPx: { value: .1 }, uInk: U.ink, uInkA: { value: .8 }, uLW: { value: 1 }, uTone: { value: 0 }
     },
     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
     fragmentShader: `
-      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW; uniform vec3 uInk;
+      uniform sampler2D tColor, tNormal, tDepth; uniform vec2 uTexel; uniform float uNear, uFar, uPx, uInkA, uLW, uTone; uniform vec3 uInk;
       varying vec2 vUv;
       float D(vec2 uv){ return uNear + texture2D(tDepth, uv).x * (uFar - uNear); }
       vec3 N(vec2 uv){ return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
@@ -5565,6 +5571,8 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
       }
       void main(){
         vec3 col = texture2D(tColor, vUv).rgb;
+        // point-cloud mode sums light additively; roll the highlights off instead of clipping them
+        if (uTone > 0.5) col = 1.0 - exp(-col * 1.15);
         vec2 o = uTexel * uLW;
         float e = uLW > 0.0 ? edgeAt(vUv, o) : 0.0;
         gl_FragColor = vec4(mix(col, uInk, e * uInkA), 1.0);
@@ -5604,7 +5612,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     for (const k of ["head", "cabin", "flow", "air"]) hexTo(values[k], U[k].value);
     hexTo(values.heat, U.heatC.value);
     comp.uniforms.uInkA.value = values.inkStrength;
-    U.cmix.value = values.paint ? 1 : 0;
+    U.cmix.value = values.paint || values.render === "points" ? 1 : 0;
     for (const [k, list] of registry) for (const e of list) e.f(values[k], e.out);
     hlMat.color.copy(U.sel.value);
   }
@@ -5677,7 +5685,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     comp.uniforms.uPx.value = 2 * curHalf / ph;
     comp.uniforms.uLW.value = P.lineWidth * dpr * .5;
     const pxPerM = ph / (2 * curHalf);
-    U.ptSize.value = clamp(.034 * pxPerM * values.pointSize, 1.3 * dpr * .5, 4.2 * dpr * values.pointSize);
+    U.ptSize.value = clamp(.026 * pxPerM * values.pointSize, 1.1 * dpr * .5, 3.2 * dpr * values.pointSize);
     if (cloud) { airStream.size.value = clamp(.11 * pxPerM, 2 * dpr * .5, 9 * dpr); flowStream.size.value = clamp(.13 * pxPerM, 2.4 * dpr * .5, 10 * dpr); }
   }
   /* point-cloud mode: meshes still cast shadows and take the pointer, but only their dots are drawn */
@@ -5698,6 +5706,8 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
     }
     for (const m of tracked) if (m.userData && m.userData.toonArgs && !m.userData.toonArgs.o.points) { m.colorWrite = !pm; m.depthWrite = !pm; }
     if (cloud) for (const c of cloud.clouds) c.visible = pm;
+    ground.visible = !pm;
+    U.cmix.value = pm || values.paint ? 1 : 0;
     if (airStream) { airStream.pts.visible = pm; flowStream.pts.visible = pm; }
     train.opt.tubes = !pm;
   }
@@ -5784,13 +5794,14 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   function render() {
     placeCamera();
     if (points()) {
-      comp.uniforms.uLW.value = 0;
+      comp.uniforms.uLW.value = 0; comp.uniforms.uTone.value = 1;
       camera.layers.enable(1);
-      renderer.setClearColor(U.bg.value, 1);
+      renderer.setClearColor(POINT_BG, 1);
       renderer.setRenderTarget(rtColour); renderer.clear(); renderer.render(scene, camera);
       renderer.setRenderTarget(null); renderer.render(compScene, compCam);
       return;
     }
+    comp.uniforms.uTone.value = 0;
     camera.layers.set(0);
     scene.traverseVisible(o => { if (o.isMesh && o.layers.mask & 1) { swapped.push(o, o.material); o.material = o.userData.nmat || normalMat; } });
     renderer.setRenderTarget(rtNormal);
@@ -5997,7 +6008,7 @@ function createVandeBharat(host, initial = {}, hooks = {}) {
   stage.root.visible = !!values.ground; stage.setPlatform(values.platform);
   if (points()) applyRender();
   setCursor(); resize(); tick(0); render();
-  overlay = buildOverlay(host, () => api, () => values);
+  overlay = buildOverlay(host, () => api, () => points() ? { ...values, bg: "#05070b", ink: "#56616b", inkStrength: .8 } : values);
   if (!hooks.manual && !hooks.frozen) raf = requestAnimationFrame(loop);
   return api;
 }
