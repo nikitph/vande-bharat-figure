@@ -12,6 +12,10 @@ It shows three cars of the sixteen — the driving trailer with its nose and cab
 | --- | --- |
 | ![Cutaway](docs/cutaway-dark.png) | ![Exploded](docs/exploded-blueprint.png) |
 
+## Also here: Panipat 1526
+
+The same engine and drawing style applied to a historical battle, with animated armies of soldiers, horsemen and elephants: [diorama](https://nikitph.github.io/vande-bharat-figure/panipat/) · [point cloud](https://nikitph.github.io/vande-bharat-figure/panipat/points.html). Source and notes are in [`panipat/`](panipat/).
+
 ## Point-cloud mode
 
 Set `render="points"` and every surface is resampled into dots (about three million at the default density) that glow on black like an X-ray, with the film, views and options unchanged. Silhouettes are brightened in place of ink lines, the light adds up where surfaces overlap, and the livery colours carry through. Dots can do things lines and solid faces cannot, so this mode adds:
