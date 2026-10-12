@@ -348,7 +348,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   let clock = 0, playing = true, last = performance.now(), shown = -1;
   function show(S, t) {
     const li = t < TOTAL - 1 ? S.line : -1;
-    if (li !== shown) { shown = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = li >= 0 ? SCRIPT[li].text : ""; sub.style.opacity = 1; }, 220); btns.forEach((b, i) => b.setAttribute("aria-pressed", i === li)); }
+    if (li !== shown) { shown = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = shown >= 0 ? SCRIPT[shown].text : ""; sub.style.opacity = 1; }, 220); btns.forEach((b, i) => b.setAttribute("aria-pressed", i === li)); }
   }
   playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
   SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });

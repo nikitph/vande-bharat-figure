@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baudhayana's Rule Chalkboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&family=Source+Serif+4:ital,opsz@1,8..60&display=swap">
+<style>
+/* Layout: a slate chalkboard in a wooden frame fills the screen; the teacher's hand is the chalk itself. Single look by choice. */
+:root{--slate:#24312d;--chalk:#ecebe3;--wood:#6b4a2e;--serif:"Source Serif 4",Georgia,serif;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:#17110c;color:var(--chalk);font-family:var(--serif);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden;background:#1d2724}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:4.5%;transform:translateX(-50%);width:min(860px,86%);text-align:center;font-style:italic;font-size:clamp(15px,2vw,23px);line-height:1.4;color:#f3efe2;text-shadow:0 1px 8px #000,0 0 2px #000;transition:opacity .5s;pointer-events:none}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:#17110c;font:13px var(--serif);color:#b9ab97}
+.bar button{font:14px "Kalam",cursive;color:var(--chalk);background:transparent;border:1px solid #4b3a2a;border-radius:2px;padding:2px 10px;cursor:pointer}
+.bar button:hover{border-color:var(--chalk)}
+.bar button:focus-visible{outline:2px solid #f2d36b;outline-offset:2px}
+.bar button[aria-pressed="true"]{background:var(--chalk);color:#17110c}
+.bar .note{margin-left:auto;font-style:italic}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas><div id="sub"></div></div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">Baudhāyana Śulba Sūtra 1.12, paraphrased. Dates for the Śulba Sūtras are uncertain.</span></div>
+<script>
+(() => {
+  /* ---------- narration; each line lists what the chalk draws while it is read ---------- */
+  const U = 70, A = [560, 560], B = [A[0] + 4 * U, A[1]], Cc = [A[0], A[1] - 3 * U];
+  const Cp = [Cc[0] + 3 * U, Cc[1] - 4 * U], Bp = [B[0] + 3 * U, B[1] - 4 * U];
+  const SCRIPT = [
+    { text: "Over two and a half thousand years ago, in the Śulba Sūtras, manuals for laying out fire altars, Baudhāyana wrote down a rule.", cam: [800, 450, 1], draw: ["title", "sutra"] },
+    { text: "The rope stretched along the diagonal of a rectangle makes as much as its length and its breadth make separately.", cam: [700, 470, 1.25], draw: ["rect", "diag", "quote"] },
+    { text: "Put a square on each side of the triangle, and one on the diagonal.", cam: [720, 430, 1.15], draw: ["sqA", "sqB", "sqC"] },
+    { text: "With sides of three and four, the two small squares hold nine and sixteen.", cam: [650, 560, 1.5], draw: ["gridA", "gridB", "n9", "n16"] },
+    { text: "The square on the diagonal holds twenty-five: exactly the two together.", cam: [880, 260, 1.4], draw: ["gridC", "n25", "sum"] },
+    { text: "So a rope with twelve equal spaces, pegged out at three, four and five, makes a true right angle on the ground.", cam: [1300, 600, 1.45], draw: ["rope"] },
+    { text: "The same rule that Greece would later name after Pythagoras.", cam: [800, 450, 1], draw: ["eq", "underline"] }
+  ];
+  const WPS = 2.4;
+  let acc = 0;
+  for (const l of SCRIPT) { l.dur = l.text.split(/\s+/).length / WPS + 2; l.t0 = acc; acc += l.dur; }
+  const TOTAL = acc + 2.5;
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+
+  /* ---------- what the chalk draws: strokes (polylines) and writing ---------- */
+  const W = "#ecebe3", Y = "#f2d36b", PK = "#f2a2b4", BL = "#9fd0f0";
+  const sq = (p, q, r, s) => [p, q, r, s, p];
+  const ITEMS = {
+    title: { write: "बौधायन शुल्बसूत्र", at: [110, 120], size: 46, col: W },
+    sutra: { write: "Baudhāyana · Śulba Sūtra 1.12", at: [114, 172], size: 26, col: "#cfd6cf" },
+    rect: { stroke: [sq(A, B, [B[0], Cc[1]], Cc)], col: W, w: 3 },
+    diag: { stroke: [[Cc, B]], col: Y, w: 4 },
+    quote: { write: "“the diagonal makes both”", at: [1100, 250], size: 30, col: Y },
+    sqA: { stroke: [sq(A, Cc, [Cc[0] - 3 * U, Cc[1]], [A[0] - 3 * U, A[1]])], col: PK, w: 3 },
+    sqB: { stroke: [sq(A, B, [B[0], B[1] + 4 * U], [A[0], A[1] + 4 * U])], col: BL, w: 3 },
+    sqC: { stroke: [sq(Cc, B, Bp, Cp)], col: Y, w: 3 },
+    gridA: { stroke: grid(A, [0, -1], [-1, 0], 3), col: PK, w: 1.2, faint: true },
+    gridB: { stroke: grid(A, [1, 0], [0, 1], 4), col: BL, w: 1.2, faint: true },
+    gridC: { stroke: grid(Cc, [4 / 5, 3 / 5], [3 / 5, -4 / 5], 5), col: Y, w: 1.2, faint: true },
+    n9: { write: "9", at: [A[0] - 1.5 * U - 12, A[1] - 1.5 * U + 18], size: 54, col: PK },
+    n16: { write: "16", at: [A[0] + 2 * U - 24, A[1] + 2 * U + 18], size: 54, col: BL },
+    n25: { write: "25", at: [(Cc[0] + Bp[0]) / 2 - 26, (Cc[1] + Bp[1]) / 2 + 18], size: 58, col: Y },
+    sum: { write: "9 + 16 = 25", at: [1110, 330], size: 44, col: W },
+    rope: { rope: true },
+    eq: { write: "a² + b² = c²", at: [1080, 170], size: 62, col: W },
+    underline: { stroke: [[[1075, 190], [1400, 186]]], col: Y, w: 4 }
+  };
+  function grid(o, u, v, n) { // unit lines across an n×n square whose corner is o and edges run along u and v
+    const L = [];
+    for (let i = 1; i < n; i++) { L.push([[o[0] + u[0] * U * i, o[1] + u[1] * U * i], [o[0] + u[0] * U * i + v[0] * U * n, o[1] + u[1] * U * i + v[1] * U * n]]); L.push([[o[0] + v[0] * U * i, o[1] + v[1] * U * i], [o[0] + v[0] * U * i + u[0] * U * n, o[1] + v[1] * U * i + u[1] * U * n]]); }
+    return L;
+  }
+  // timing: within its line, each item gets an equal slice of the first 80% of the line
+  const TIMED = [];
+  for (const l of SCRIPT) l.draw.forEach((k, j) => { const slot = l.dur * .8 / l.draw.length; TIMED.push({ key: k, t0: l.t0 + .3 + j * slot, dur: slot * .9, ...ITEMS[k] }); });
+
+  /* ---------- canvases: the board is painted once, chalk is redrawn each frame from seeded grain ---------- */
+  const cv = document.getElementById("c"), g = cv.getContext("2d"), stage = document.getElementById("stage");
+  const BW = 1600, BH = 900, board = document.createElement("canvas"), bg = board.getContext("2d");
+  board.width = BW; board.height = BH;
+  let seed = 5; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  { // slate, old smudges from earlier lessons, and the wooden frame
+    bg.fillStyle = "#24312d"; bg.fillRect(0, 0, BW, BH);
+    for (let i = 0; i < 26; i++) { const x = rnd() * BW, y = rnd() * BH, r = 80 + rnd() * 260, gr = bg.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgba(220,225,215,${.03 + rnd() * .05})`); gr.addColorStop(1, "rgba(220,225,215,0)"); bg.fillStyle = gr; bg.fillRect(x - r, y - r, r * 2, r * 2); }
+    for (let i = 0; i < 14; i++) { const x = rnd() * BW, y = rnd() * BH, r = 60 + rnd() * 160; bg.strokeStyle = `rgba(220,225,215,${.012 + rnd() * .018})`; bg.lineWidth = 30 + rnd() * 40; bg.beginPath(); bg.arc(x, y, r, rnd() * 6, rnd() * 6 + 1.5); bg.stroke(); }
+    const id = bg.getImageData(0, 0, BW, BH); for (let i = 0; i < id.data.length; i += 4) { const n = (Math.random() - .5) * 10; id.data[i] += n; id.data[i + 1] += n; id.data[i + 2] += n; } bg.putImageData(id, 0, 0);
+    const wood = (x, y, w, h) => { const gr = bg.createLinearGradient(x, y, x, y + h); gr.addColorStop(0, "#7a5636"); gr.addColorStop(.5, "#5e4027"); gr.addColorStop(1, "#4a3220"); bg.fillStyle = gr; bg.fillRect(x, y, w, h); bg.strokeStyle = "rgba(0,0,0,.25)"; bg.lineWidth = 1; for (let i = 0; i < 6; i++) { bg.beginPath(); bg.moveTo(x, y + rnd() * h); bg.bezierCurveTo(x + w * .3, y + rnd() * h, x + w * .7, y + rnd() * h, x + w, y + rnd() * h); bg.stroke(); } };
+    wood(0, 0, BW, 26); wood(0, BH - 40, BW, 40); wood(0, 0, 26, BH); wood(BW - 26, 0, 26, BH);
+    bg.fillStyle = "#e9e6dc"; bg.fillRect(1260, BH - 52, 70, 14); bg.fillStyle = "#f2d36b"; bg.fillRect(1350, BH - 50, 46, 12); bg.fillStyle = "#e9e6dc"; bg.fillRect(1418, BH - 51, 28, 12);
+    bg.fillStyle = "rgba(255,255,255,.08)"; bg.fillRect(26, BH - 40, BW - 52, 3);
+  }
+  let W_ = 1, H_ = 1, DPR = 1;
+  function resize() { DPR = Math.min(2, devicePixelRatio || 1); W_ = stage.clientWidth; H_ = stage.clientHeight; cv.width = W_ * DPR; cv.height = H_ * DPR; }
+  addEventListener("resize", resize); resize();
+
+  // chalk: a stroke is a dusting of small grains along a line, thinner where the chalk skips
+  function chalkLine(a, b, k, col, w, sd, faint) {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.floor(L * k * 1.15);
+    let q = sd; const r = () => (q = (q * 16807) % 2147483647) / 2147483647;
+    g.fillStyle = col;
+    const nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L;
+    for (let i = 0; i < n; i++) {
+      const u = i / (L * 1.15), skip = Math.sin(u * L * .09 + sd) > .82 ? .45 : 1;
+      if (r() > skip * (faint ? .55 : .95)) { r(); r(); continue; }
+      const o = (r() - .5) * w * 1.6, x = a[0] + (b[0] - a[0]) * u + nx * o + (r() - .5), y = a[1] + (b[1] - a[1]) * u + ny * o;
+      g.globalAlpha = (faint ? .35 : .7) * (.5 + r() * .5);
+      const s = .9 + r() * 1.4; g.fillRect(x, y, s, s);
+    }
+    g.globalAlpha = 1;
+  }
+  function strokeItem(it, k, sd) {
+    const segs = []; for (const pl of it.stroke) for (let i = 0; i < pl.length - 1; i++) segs.push([pl[i], pl[i + 1]]);
+    const lens = segs.map(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1])), tot = lens.reduce((s, v) => s + v, 0);
+    let left = tot * k;
+    segs.forEach(([a, b], i) => { if (left <= 0) return; const f = Math.min(1, left / lens[i]); chalkLine(a, b, f, it.col, it.w, sd + i * 7919, it.faint); left -= lens[i]; });
+    // the chalk tip, while drawing
+    if (k > 0 && k < 1) { let l2 = tot * k; for (let i = 0; i < segs.length; i++) { if (l2 <= lens[i]) { const [a, b] = segs[i], f = l2 / lens[i]; tip(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, it.col); break; } l2 -= lens[i]; } }
+  }
+  function tip(x, y, col) { g.save(); g.translate(x, y); g.rotate(-.7); g.fillStyle = col; g.globalAlpha = .9; g.fillRect(-3, -2, 34, 8); g.fillStyle = "rgba(0,0,0,.25)"; g.fillRect(-3, 4, 34, 2); g.restore(); }
+  // writing: real letters, eroded by grain so they read as chalk, revealed left to right
+  const textCache = new Map();
+  function chalkText(it) {
+    const key = it.write + it.size + it.col;
+    if (textCache.has(key)) return textCache.get(key);
+    const c = document.createElement("canvas"), x = c.getContext("2d");
+    x.font = `400 ${it.size}px Kalam, cursive`;
+    const w = Math.ceil(x.measureText(it.write).width) + 20, h = Math.ceil(it.size * 1.6);
+    c.width = w; c.height = h; x.font = `400 ${it.size}px Kalam, cursive`; x.fillStyle = it.col; x.globalAlpha = .9; x.textBaseline = "alphabetic";
+    x.fillText(it.write, 6, it.size * 1.1);
+    const d = x.getImageData(0, 0, w, h); for (let i = 3; i < d.data.length; i += 4) if (d.data[i] > 0) d.data[i] *= Math.random() < .28 ? .15 : .55 + Math.random() * .45; x.putImageData(d, 0, 0);
+    const out = { c, w, h };
+    if (document.fonts && document.fonts.check(`${it.size}px Kalam`)) textCache.set(key, out);
+    return out;
+  }
+  function textItem(it, k) {
+    const { c, w, h } = chalkText(it), shown = w * k;
+    g.drawImage(c, 0, 0, shown, h, it.at[0], it.at[1] - it.size * 1.1, shown, h);
+    if (k > 0 && k < 1) tip(it.at[0] + shown, it.at[1] - it.size * .3, it.col);
+  }
+  // the knotted rope: a loose loop that is pulled taut into a 3-4-5 triangle on its pegs
+  function rope(k, t) {
+    const u = 58, P0 = [1150, 770], P1 = [P0[0] + 4 * u, P0[1]], P2 = [P0[0], P0[1] - 3 * u];
+    const tri = [], loose = [];
+    const along = (s) => { s = ((s % 12) + 12) % 12; if (s < 4) return [P0[0] + s * u, P0[1]]; if (s < 9) { const f = (s - 4) / 5; return [lerp(P1[0], P2[0], f), lerp(P1[1], P2[1], f)]; } return [P0[0], lerp(P2[1], P0[1], (s - 9) / 3)]; };
+    for (let i = 0; i <= 96; i++) { const s = i / 8; tri.push(along(s)); const a = s / 12 * Math.PI * 2; loose.push([1290 + Math.cos(a) * 120 + Math.sin(a * 3) * 14, 680 + Math.sin(a) * 70]); }
+    const pull = ease((k - .25) / .6);
+    g.strokeStyle = "#d9b77a"; g.lineWidth = 3; g.globalAlpha = Math.min(1, k * 4) * .9; g.setLineDash([7, 3]);
+    g.beginPath(); tri.forEach((p, i) => { const x = lerp(loose[i][0], p[0], pull), y = lerp(loose[i][1], p[1], pull); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); g.stroke(); g.setLineDash([]);
+    for (let i = 0; i < 12; i++) { const p = tri[i * 8], l = loose[i * 8], x = lerp(l[0], p[0], pull), y = lerp(l[1], p[1], pull); g.fillStyle = "#f3e2b8"; g.beginPath(); g.arc(x, y, 5, 0, 7); g.fill(); }
+    if (pull > .9) { const a = (pull - .9) * 10; g.globalAlpha = a; for (const p of [P0, P1, P2]) { g.strokeStyle = W; g.lineWidth = 2; g.beginPath(); g.arc(p[0], p[1], 11, 0, 7); g.stroke(); }
+      g.strokeStyle = Y; g.lineWidth = 2.5; g.strokeRect(P0[0], P0[1] - 22, 22, 22);
+      g.font = "400 30px Kalam, cursive"; g.fillStyle = W; g.fillText("3", P0[0] - 34, P0[1] - 1.5 * u + 10); g.fillText("4", P0[0] + 2 * u - 8, P0[1] + 38); g.fillText("5", P0[0] + 2 * u + 18, P0[1] - 1.5 * u - 6); }
+    g.globalAlpha = 1;
+  }
+
+  /* ---------- a frame ---------- */
+  function frame(t) {
+    const i = lineAt(t), L = SCRIPT[i], Pv = i ? SCRIPT[i - 1] : SCRIPT[0], k = ease((t - L.t0) / (L.dur * .55));
+    const cx = lerp(Pv.cam[0], L.cam[0], k), cy = lerp(Pv.cam[1], L.cam[1], k), z = lerp(Pv.cam[2], L.cam[2], k);
+    const s = Math.max(W_ / BW, H_ / BH) * z * DPR;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = "#17110c"; g.fillRect(0, 0, cv.width, cv.height);
+    const ox = cv.width / 2 - Math.max(BW / 2 * s - cv.width / 2 + 0, Math.min(cx * s, BW * s - cv.width / 2)) , oy = cv.height / 2 - Math.max(cv.height / 2, Math.min(cy * s, BH * s - cv.height / 2));
+    g.setTransform(s, 0, 0, s, ox, oy);
+    g.drawImage(board, 0, 0);
+    TIMED.forEach((it, n) => {
+      const p = Math.max(0, Math.min(1, (t - it.t0) / it.dur));
+      if (p <= 0) return;
+      if (it.stroke) strokeItem(it, p, 1000 + n * 131);
+      else if (it.write) textItem(it, p);
+      else if (it.rope) rope(p, t);
+    });
+    // a light dusting where the board has been written on, then a soft vignette
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const vg = g.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * .35, cv.width / 2, cv.height / 2, cv.height * .95); vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.4)"); g.fillStyle = vg; g.fillRect(0, 0, cv.width, cv.height);
+    return i;
+  }
+
+  /* ---------- clock and controls ---------- */
+  const sub = document.getElementById("sub"), playB = document.getElementById("play"), bar = document.getElementById("bar"), btns = [];
+  let clock = 0, playing = true, last = performance.now(), shown = -1;
+  function show(i) { if (i !== shown) { shown = i; sub.style.opacity = 0; setTimeout(() => { sub.textContent = SCRIPT[shown].text; sub.style.opacity = 1; }, 220); btns.forEach((b, j) => b.setAttribute("aria-pressed", j === i)); } }
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; clock = TOTAL - 1; }
+  function loop(now) { requestAnimationFrame(loop); const dt = Math.min(.05, (now - last) / 1000); last = now; if (playing) clock = (clock + dt) % TOTAL; show(frame(clock)); }
+  window.CHALK = { seek: t => { playing = false; clock = t; show(frame(t)); }, SCRIPT, TOTAL };
+  (document.fonts ? document.fonts.load("46px Kalam") : Promise.resolve()).then(() => requestAnimationFrame(loop));
+})();
+</script>
+</body>
+</html>

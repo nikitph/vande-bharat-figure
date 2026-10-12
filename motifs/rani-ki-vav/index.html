@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rani ki Vav Survey</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz@1,6..72&display=swap">
+<style>
+/* Layout: a survey viewport on black; the scan reveals the stepwell, measurements and labels float in it. Single dark look by choice. */
+:root{--bg:#06080b;--ink:#e9e4d4;--mute:#7d8a91;--scan:#7fe3ff;--sand:#e0a463;--mono:"IBM Plex Mono",ui-monospace,monospace;--serif:"Newsreader",Georgia,serif;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--mono);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{position:absolute;inset:0;pointer-events:none}
+.tag{position:absolute;transform:translate(-50%,-100%);font-size:11px;letter-spacing:.12em;color:var(--scan);white-space:nowrap;text-shadow:0 0 6px #000;transition:opacity .4s}
+.tag.dim{color:var(--ink)}
+#sub{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);width:min(860px,86%);text-align:center;font-family:var(--serif);font-style:italic;font-size:clamp(16px,2.1vw,25px);line-height:1.35;text-shadow:0 1px 10px #000,0 0 2px #000;transition:opacity .5s;pointer-events:none}
+#readout{position:absolute;left:3%;top:4%;font-size:11px;letter-spacing:.12em;color:var(--mute);line-height:1.8;pointer-events:none;font-variant-numeric:tabular-nums}
+#readout b{color:var(--scan);font-weight:500}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:var(--bg);font-size:12px;color:var(--mute)}
+.bar button{font:12px var(--mono);color:var(--ink);background:transparent;border:1px solid #233038;border-radius:2px;padding:4px 9px;cursor:pointer}
+.bar button:hover{border-color:var(--ink)}
+.bar button:focus-visible{outline:2px solid var(--scan);outline-offset:2px}
+.bar button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.bar .note{margin-left:auto}
+#fallback[hidden]{display:none}
+#fallback{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);padding:16px;text-align:center}
+</style>
+</head>
+<body>
+<div id="stage"><div id="hud"></div><div id="readout"></div><div id="sub"></div><div id="fallback" hidden>This survey needs WebGL, which this browser has not made available.</div></div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">A simplified model built from published dimensions, not a real survey.</span></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  /* ---------- narration: each line drives the survey ---------- */
+  const SCRIPT = [
+    { text: "In Patan, in Gujarat, a building lies hidden below the ground, upside down.", s: { scan: .02, level: 0, silt: 0, hi: -1, dims: 0, levels: 0, cam: [32, -4, 0, 210, 52, 92] } },
+    { text: "Rani ki Vav, the queen's stepwell, was built in the eleventh century in memory of King Bhima I.", s: { scan: 1.05, level: 0, silt: 0, hi: -1, dims: 0, levels: 0, cam: [32, -6, 0, 228, 40, 88] } },
+    { text: "Instead of rising, it descends: seven levels of stairs and pillared pavilions, down to the water.", s: { scan: 1.05, level: 1, silt: 0, hi: -1, dims: 0, levels: 1, cam: [28, -12, 0, 262, 24, 70] } },
+    { text: "It is about sixty-four metres long, twenty wide and twenty-seven deep.", s: { scan: 1.05, level: 1, silt: 0, hi: -1, dims: 1, levels: 0, cam: [32, -10, 0, 220, 30, 96] } },
+    { text: "Its walls carry more than five hundred principal sculptures: Vishnu's avatars, apsaras and nagakanyas.", s: { scan: 1.05, level: 1, silt: 0, hi: 2, dims: 0, levels: 0, cam: [36, -15, 2.5, 270, 6, 16] } },
+    { text: "Floods filled it with silt, and for centuries it lay buried. It was dug out only in the twentieth century.", s: { scan: 1.05, level: 1, silt: 1, hi: 4, dims: 0, levels: 0, cam: [32, -8, 0, 205, 38, 80] } },
+    { text: "Since 2014 it has been a World Heritage Site, and water still stands at the bottom of the well.", s: { scan: 1.05, level: 1, silt: 0, hi: 3, dims: 0, levels: 0, cam: [58, -16, 0, 200, 66, 34] } }
+  ];
+  const KEYS = ["scan", "level", "silt", "dims", "levels"];
+  const WPS = 2.5;
+  let acc = 0;
+  for (const l of SCRIPT) { l.dur = l.text.split(/\s+/).length / WPS + 2; l.t0 = acc; acc += l.dur; }
+  const TOTAL = acc + 2;
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+  function stateAt(t) {
+    const i = lineAt(t), L = SCRIPT[i], P = i ? SCRIPT[i - 1].s : { ...SCRIPT[0].s, scan: 0 }, kc = ease((t - L.t0) / (L.dur * .7)), kl = Math.max(0, Math.min(1, (t - L.t0) / (L.dur * .85))), o = { line: i, hi: L.s.hi, lk: kl };
+    for (const k of KEYS) o[k] = lerp(P[k], L.s[k], k === "scan" || k === "level" ? kl : kc);
+    if (i === 5) o.silt = kl < .5 ? ease(kl * 2) : 1 - ease((kl - .5) * 2);   // buried, then dug out
+    o.cam = P.cam.map((v, j) => j === 3 ? v + ((((L.s.cam[3] - v) % 360) + 540) % 360 - 180) * kc : j === 5 ? Math.exp(lerp(Math.log(v), Math.log(L.s.cam[5]), kc)) : lerp(v, L.s.cam[j], kc));
+    return o;
+  }
+
+  /* ---------- the stepwell as surfaces, then sampled into points ---------- */
+  // x runs from the entrance (east, x = 0) down to the well (west); y is height, 0 at ground; z across
+  const LEN = 50, HW = 4.6, LV = 3.4, NL = 7, WELL = { x: 59.5, r: 5, depth: 27 }, TANK = [50, 54.5];
+  const floorAt = x => { if (x <= 0) return 0; if (x >= TANK[0]) return -NL * LV - 1; const seg = LEN / NL, k = Math.floor(x / seg), f = (x - k * seg) / seg; const y0 = -k * LV; return f < .5 ? y0 - Math.floor(f / .5 * 17) / 17 * LV : y0 - LV; };
+  const P = [], N = [], I = [];
+  let rs = 9; const rnd = () => (rs = (rs * 16807) % 2147483647) / 2147483647;
+  const put = (x, y, z, nx, ny, nz, kind, fl = 0, lev = 0) => { P.push(x, y, z); N.push(nx, ny, nz); I.push(kind, rnd(), fl, lev); };
+  const DENS = 70;    // points per square metre on the structure
+  function rect(o, u, v, n, kind, dens = DENS, extra) { // a sampled parallelogram: origin o, edges u and v, normal n
+    const area = Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]), cnt = Math.round(area * dens);
+    for (let i = 0; i < cnt; i++) { const a = rnd(), b = rnd(), x = o[0] + u[0] * a + v[0] * b, y = o[1] + u[1] * a + v[1] * b, z = o[2] + u[2] * a + v[2] * b; if (extra && !extra(x, y, z)) continue; put(x, y, z, n[0], n[1], n[2], kind, floorAt(x), Math.min(NL, Math.floor(-y / LV + 1e-3))); }
+  }
+  // stairs and landings
+  for (let k = 0; k < NL; k++) {
+    const seg = LEN / NL, x0 = k * seg, y0 = -k * LV;
+    for (let s = 0; s < 17; s++) { const xa = x0 + s * seg * .5 / 17, ya = y0 - s * LV / 17; rect([xa, ya, -HW], [seg * .5 / 17, 0, 0], [0, 0, HW * 2], [0, 1, 0], 0); rect([xa + seg * .5 / 17, ya, -HW], [0, -LV / 17, 0], [0, 0, HW * 2], [-1, 0, 0], 0); }
+    rect([x0 + seg * .5, y0 - LV, -HW], [seg * .5, 0, 0], [0, 0, HW * 2], [0, 1, 0], 0);
+  }
+  // side walls, with rows of niches holding sculpture
+  for (const sz of [-1, 1]) {
+    for (let x = 0; x < TANK[0]; x += .5) {
+      const fy = floorAt(x + .25);
+      for (let y = fy; y < 0; y += .5) {
+        const st = Math.floor(-y / LV), yy = -y - st * LV, xm = (x % 2.2);
+        const inNiche = yy > .7 && yy < 2.6 && xm > .45 && xm < 1.75 && y < -1;
+        const cnt = Math.round(.25 * DENS);
+        for (let i = 0; i < cnt; i++) {
+          const px = x + rnd() * .5, py = y + rnd() * .5;
+          if (py > 0 || py < fy) continue;
+          const pyy = -py - Math.floor(-py / LV) * LV, pm = px % 2.2, niche = pyy > .7 && pyy < 2.6 && pm > .45 && pm < 1.75 && py < -1;
+          if (niche) {
+            // the niche is recessed, and a figure stands in it
+            const cx = (pm - 1.1) / .65, cy = (pyy - 1.55) / .95, body = cx * cx * 2.2 + cy * cy < 1;
+            if (body) put(px, py, sz * (HW + .32 - Math.sqrt(Math.max(0, 1 - cx * cx * 2.2 - cy * cy)) * .32), 0, 0, -sz, 2, 0, st + 1);
+            else put(px, py, sz * (HW + .35), 0, 0, -sz, 0, 0, st + 1);
+          } else {
+            const band = pyy < .25 || (pyy > 2.85 && pyy < 3.1);
+            put(px, py, sz * (HW - (band ? .12 : 0)), 0, 0, -sz, band ? 5 : 0, 0, st + 1);
+          }
+        }
+        void inNiche;
+      }
+    }
+  }
+  // pillared pavilions at each landing: pillars and lintels in storeys up to the ground
+  for (let k = 1; k < NL; k++) {
+    const seg = LEN / NL, xc = (k - 1) * seg + seg * .75, fy = -k * LV;
+    for (const dx of [-1.4, 1.4]) for (const z of [-3.1, -1.05, 1.05, 3.1]) {
+      for (const [nx, nz, ox, oz] of [[1, 0, .22, 0], [-1, 0, -.22, 0], [0, 1, 0, .22], [0, -1, 0, -.22]]) rect([xc + dx + ox - (nz ? .22 : 0), fy, z + oz - (nx ? .22 : 0)], [0, -fy, 0], nx ? [0, 0, .44] : [.44, 0, 0], [nx, 0, nz], 0, DENS * .9);
+    }
+    for (let st = 1; st <= k; st++) { const y = fy + st * LV - .35; for (const dx of [-1.4, 1.4]) { rect([xc + dx - .25, y, -HW], [.5, 0, 0], [0, 0, HW * 2], [0, 1, 0], 5, DENS * .7); rect([xc + dx - .25, y - .35, -HW], [0, .35, 0], [0, 0, HW * 2], [1, 0, 0], 5, DENS * .6); } rect([xc - 1.4, y, -HW], [2.8, 0, 0], [0, 0, .5], [0, 1, 0], 5); rect([xc - 1.4, y, HW - .5], [2.8, 0, 0], [0, 0, .5], [0, 1, 0], 5); }
+  }
+  // the tank before the well
+  rect([TANK[0], -NL * LV - 1, -HW], [TANK[1] - TANK[0], 0, 0], [0, 0, HW * 2], [0, 1, 0], 0);
+  for (const sz of [-1, 1]) rect([TANK[0], -NL * LV - 1, sz * HW], [TANK[1] - TANK[0], 0, 0], [0, NL * LV + 1, 0], [0, 0, -sz], 0);
+  // the well shaft, with ring galleries
+  for (let i = 0; i < 2 * Math.PI * WELL.r * WELL.depth * DENS * .9; i++) {
+    const a = rnd() * Math.PI * 2, y = -rnd() * WELL.depth, ring = (-y % LV) < .4 && y < -1, r = WELL.r - (ring ? .45 : 0);
+    if (Math.cos(a) < -.86 && y > -NL * LV - 1) continue;   // the opening from the tank
+    put(WELL.x + Math.cos(a) * r, y, Math.sin(a) * r, -Math.cos(a), 0, -Math.sin(a), ring ? 5 : 0, 0, Math.min(NL, Math.floor(-y / LV) + 1));
+  }
+  // water at the bottom of the well
+  for (let i = 0; i < 9000; i++) { const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * (WELL.r - .1); put(WELL.x + Math.cos(a) * r, -WELL.depth + 1.5, Math.sin(a) * r, 0, 1, 0, 3, 0, NL); }
+  // the ground around it, and a low parapet round the opening
+  for (let i = 0; i < 150000; i++) {
+    const x = -14 + rnd() * 92, z = -24 + rnd() * 48;
+    if (x > -.3 && x < TANK[1] + .3 && Math.abs(z) < HW + .35) continue;
+    if (Math.hypot(x - WELL.x, z) < WELL.r + .35) continue;
+    const y = Math.sin(x * .3) * Math.cos(z * .25) * .15 + (rnd() - .5) * .06;
+    put(x, y, z, 0, 1, 0, 1, 0, 0);
+  }
+  for (const sz of [-1, 1]) rect([0, 0, sz * (HW + .35)], [TANK[1], 0, 0], [0, .7, 0], [0, 0, sz], 5, DENS * .8);
+  // silt: sheets inside the trench whose height the shader sets
+  for (let i = 0; i < 60000; i++) { const x = rnd() * TANK[1], z = (rnd() * 2 - 1) * HW; put(x, 0, z, 0, 1, 0, 4, floorAt(x), 0); }
+  for (let i = 0; i < 12000; i++) { const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * WELL.r; put(WELL.x + Math.cos(a) * r, 0, Math.sin(a) * r, 0, 1, 0, 4, -WELL.depth + 1.5, 0); }
+  const COUNT = P.length / 3;
+
+  /* ---------- rendering ---------- */
+  const stage = document.getElementById("stage");
+  let renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); } catch (e) { document.getElementById("fallback").hidden = false; return; }
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1)); renderer.setClearColor(0x06080b, 1);
+  stage.prepend(renderer.domElement);
+  const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(36, 1, .5, 800);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(P, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(N, 3));
+  geo.setAttribute("aInfo", new THREE.Float32BufferAttribute(I, 4));
+  const uniforms = { uScan: { value: 0 }, uLevel: { value: 0 }, uSilt: { value: 0 }, uHi: { value: -1 }, uTime: { value: 0 }, uPx: { value: 800 }, uLight: { value: new THREE.Vector3(.5, .8, .35).normalize() } };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, transparent: false, depthWrite: true,
+    vertexShader: `
+      attribute vec4 aInfo; uniform float uScan, uLevel, uSilt, uHi, uTime, uPx; uniform vec3 uLight;
+      varying vec3 vCol; varying float vA;
+      vec3 ramp(float d){ // sandstone in light, cooling to dusk with depth
+        vec3 a = vec3(.93, .86, .70), b = vec3(.88, .60, .34), c = vec3(.44, .30, .52);
+        return d < .5 ? mix(a, b, d * 2.) : mix(b, c, (d - .5) * 2.);
+      }
+      void main(){
+        float kind = aInfo.x, seed = aInfo.y, fl = aInfo.z, lev = aInfo.w;
+        vec3 p = position;
+        float silt = uSilt * 26.0;
+        if (kind > 3.5 && kind < 4.5) p.y = max(fl, -silt * 0.0 + (-27.0 + silt));   // silt sheet rises from the bottom
+        float span = 64.0, front = uScan * (span + 24.0) - 12.0;
+        float show = step(p.x, front);
+        // the deep levels are revealed one by one, top down
+        float depthOK = step(lev, uLevel * 7.0 + .001) + step(lev, .5);
+        show *= min(1.0, depthOK);
+        if (kind > 3.5 && kind < 4.5) show *= step(fl + .05, p.y) * step(.01, uSilt);
+        else if (kind < 3.5 || kind > 4.5) show *= step(-27.0 + silt - .02, p.y) + step(p.y, -27.0 + silt - .02) * (kind == 1.0 ? 1.0 : 0.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float d = clamp(-p.y / 27.0, 0.0, 1.0);
+        vec3 col = ramp(d);
+        float lam = .55 + .45 * max(dot(normalize(normal), uLight), 0.0);
+        col *= lam;
+        if (kind == 1.0) col = vec3(.34, .37, .38) * (.8 + .4 * seed);
+        if (kind == 2.0) col = mix(col, vec3(1.0, .82, .52), .35);
+        if (kind == 5.0) col *= 1.18;
+        if (kind == 3.0) col = vec3(.35, .8, .95) * (.7 + .3 * sin(uTime * 2.0 + p.x * 3.0 + p.z * 2.0 + seed * 6.0));
+        if (kind == 4.0) col = vec3(.52, .40, .27) * (.8 + .3 * seed);
+        if (uHi >= 0.0 && kind != uHi && kind != 1.0) col = mix(col, vec3(dot(col, vec3(.33))), .65) * .55;
+        if (uHi >= 0.0 && kind == uHi) col *= 1.25;
+        // the scan front: a bright line of fresh returns
+        float edge = 1.0 - smoothstep(0.0, 2.5, front - p.x);
+        col = mix(col, vec3(.5, .9, 1.0), edge * .85 * step(uScan, 1.0));
+        col *= .85 + .3 * seed;
+        vCol = col; vA = show;
+        float size = (kind == 1.0 ? .07 : .085) * uPx / -mv.z;
+        gl_PointSize = show > .5 ? clamp(size, 1.2, kind == 1.0 ? 3.0 : 6.0) : 0.0;
+        if (show < .5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      }`,
+    fragmentShader: `varying vec3 vCol; varying float vA; void main(){ vec2 c = gl_PointCoord * 2.0 - 1.0; if (dot(c, c) > 1.0) discard; gl_FragColor = vec4(vCol, 1.0); }`
+  });
+  scene.add(new THREE.Points(geo, mat));
+  // dimension lines for the measurements
+  const dimMat = new THREE.LineBasicMaterial({ color: 0x7fe3ff, transparent: true, opacity: 0 });
+  const dimPts = [];
+  const dl = (a, b, tick) => { dimPts.push(...a, ...b); for (const q of [a, b]) dimPts.push(q[0] + tick[0], q[1] + tick[1], q[2] + tick[2], q[0] - tick[0], q[1] - tick[1], q[2] - tick[2]); };
+  dl([0, .6, -12], [64.5, .6, -12], [0, .8, 0]); dl([-5, .6, -10], [-5, .6, 10], [.8, 0, 0]); dl([66, 0, 6], [66, -27, 6], [.8, 0, 0]);
+  const dimGeo = new THREE.BufferGeometry(); dimGeo.setAttribute("position", new THREE.Float32BufferAttribute(dimPts, 3));
+  scene.add(new THREE.LineSegments(dimGeo, dimMat));
+
+  /* ---------- labels projected from the model ---------- */
+  const hud = document.getElementById("hud"), tags = [];
+  const tag = (txt, pos, group, dim) => { const e = document.createElement("div"); e.className = "tag" + (dim ? " dim" : ""); e.textContent = txt; hud.appendChild(e); tags.push({ e, pos: new THREE.Vector3(...pos), group }); };
+  tag("≈ 64 M LONG", [32, 1.5, -12], "dims"); tag("≈ 20 M WIDE", [-5, 1.5, 0], "dims"); tag("≈ 27 M DEEP", [67, -22, 6], "dims");
+  for (let k = 1; k <= NL; k++) tag("LEVEL " + k, [(k - 1) * LEN / NL + LEN / NL * .75, -k * LV + .6, HW + 1.6], "levels", true);
+
+  /* ---------- clock, camera, controls ---------- */
+  const sub = document.getElementById("sub"), readout = document.getElementById("readout"), playB = document.getElementById("play"), bar = document.getElementById("bar"), btns = [];
+  let clock = 0, playing = true, last = performance.now(), shown = -1;
+  function resize() { const w = stage.clientWidth, h = stage.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); uniforms.uPx.value = h * renderer.getPixelRatio() / (2 * Math.tan(camera.fov * Math.PI / 360)); }
+  addEventListener("resize", resize); resize();
+  const v = new THREE.Vector3();
+  function frame(t) {
+    const S = stateAt(t);
+    uniforms.uScan.value = S.scan; uniforms.uLevel.value = S.level; uniforms.uSilt.value = S.silt; uniforms.uHi.value = S.hi; uniforms.uTime.value = t;
+    dimMat.opacity = S.dims;
+    const [tx, ty, tz, az, el, dist] = S.cam, a = az * Math.PI / 180, e = el * Math.PI / 180;
+    camera.position.set(tx + Math.cos(e) * Math.cos(a) * dist, ty + Math.sin(e) * dist, tz + Math.cos(e) * Math.sin(a) * dist);
+    camera.lookAt(tx, ty, tz);
+    renderer.render(scene, camera);
+    const w = stage.clientWidth, h = stage.clientHeight;
+    for (const tg of tags) {
+      const op = tg.group === "dims" ? S.dims : S.levels;
+      v.copy(tg.pos).project(camera);
+      tg.e.style.left = ((v.x * .5 + .5) * w).toFixed(1) + "px"; tg.e.style.top = ((-v.y * .5 + .5) * h).toFixed(1) + "px";
+      tg.e.style.opacity = v.z < 1 ? op.toFixed(2) : 0;
+    }
+    if (S.line !== shown) { shown = S.line; sub.style.opacity = 0; setTimeout(() => { sub.textContent = SCRIPT[shown].text; sub.style.opacity = 1; }, 220); btns.forEach((b, j) => b.setAttribute("aria-pressed", j === shown)); }
+    const pts = Math.round(COUNT * Math.min(1, S.scan));
+    readout.innerHTML = `RANI KI VAV · PATAN · 23.859° N 72.102° E<br>POINTS <b>${pts.toLocaleString("en-US")}</b> · ${S.scan < 1 ? "SCANNING" : S.silt > .02 ? "SILT " + Math.round(S.silt * 26) + " M" : "SURVEY COMPLETE"}`;
+  }
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; clock = SCRIPT[3].t0 + 3; }
+  function loop(now) { requestAnimationFrame(loop); const dt = Math.min(.05, (now - last) / 1000); last = now; if (playing) clock = (clock + dt) % TOTAL; frame(clock); }
+  window.VAV = { seek: t => { playing = false; clock = t; frame(t); }, SCRIPT, TOTAL, COUNT };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

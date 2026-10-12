@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Monsoon Flow</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the ocean fills the screen; wind runs over it as fine trails; words sit low and quiet. Single dark look by choice. */
+:root{--sea:#08131f;--land:#2a2a24;--ink:#e8eef2;--mute:#8aa0ad;--warm:#f2b25c;--wet:#5fc9a0;--serif:"Fraunces",Georgia,serif;--mono:"IBM Plex Mono",ui-monospace,monospace;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:#05090f;color:var(--ink);font-family:var(--serif);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden;background:var(--sea)}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);width:min(860px,86%);text-align:center;font-style:italic;font-size:clamp(16px,2.1vw,25px);line-height:1.35;text-shadow:0 1px 10px #000,0 0 2px #000;transition:opacity .5s;pointer-events:none}
+#readout{position:absolute;right:3%;top:4%;text-align:right;font-family:var(--mono);font-size:clamp(11px,1.2vw,13px);letter-spacing:.12em;color:var(--mute);pointer-events:none;font-variant-numeric:tabular-nums}
+#readout b{display:block;font-family:var(--serif);font-weight:400;letter-spacing:0;font-size:clamp(22px,3vw,38px);color:var(--ink);margin-bottom:4px}
+#key{position:absolute;left:3%;top:4%;font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--mute);pointer-events:none;line-height:1.9}
+#key i{display:inline-block;width:18px;height:2px;vertical-align:middle;margin-right:8px}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:#05090f;font:12px var(--mono);color:var(--mute)}
+.bar button{font:12px var(--mono);color:var(--ink);background:transparent;border:1px solid #23394a;border-radius:2px;padding:4px 9px;cursor:pointer}
+.bar button:hover{border-color:var(--ink)}
+.bar button:focus-visible{outline:2px solid var(--warm);outline-offset:2px}
+.bar button[aria-pressed="true"]{background:var(--ink);color:#05090f}
+.bar .note{margin-left:auto}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas><div id="key"><span><i style="background:#e8eef2"></i>WIND</span><br><span><i style="background:#5fc9a0"></i>MONSOON ARRIVED</span><br><span><i style="background:repeating-linear-gradient(90deg,#f2b25c 0 5px,transparent 5px 9px)"></i>NORMAL ONSET DATE</span></div><div id="readout"></div><div id="sub"></div></div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">Winds are a schematic of the seasonal mean; onset dates are IMD's normals, approximate.</span></div>
+<script>
+(() => {
+  /* ---------- narration: each line sets the season, the date and what to highlight ---------- */
+  const SCRIPT = [
+    { text: "Every year, the wind over the Indian Ocean turns right round.", s: { season: 0, day: 15, cam: [75, 12, 1.0], heat: 0, jet: 0 } },
+    { text: "In winter it blows off the land: dry north-east winds pour down from the Himalaya and out to sea.", s: { season: 0, day: 30, cam: [80, 18, 1.25], heat: 0, jet: 0 } },
+    { text: "By May the land has baked. Hot air rises over the northern plains and draws in air from the ocean.", s: { season: .45, day: 135, cam: [78, 20, 1.3], heat: 1, jet: 0 } },
+    { text: "Trade winds from the southern ocean cross the equator, swing east, and arrive as the south-west monsoon, heavy with water.", s: { season: 1, day: 148, cam: [62, 7, 1.15], heat: .6, jet: 1 } },
+    { text: "It reaches Kerala around the first of June.", s: { season: 1, day: 152, cam: [76, 11, 2.1], heat: .4, jet: .4 } },
+    { text: "One arm climbs the west coast and breaks on the Western Ghats. The other sweeps up the Bay of Bengal and turns west along the Himalaya.", s: { season: 1, day: 172, cam: [81, 20, 1.45], heat: .3, jet: .2, arms: 1 } },
+    { text: "By early July it covers the whole country. About three-quarters of India's rain falls in these four months.", s: { season: 1, day: 190, cam: [79, 21, 1.3], heat: .1, jet: 0 } },
+    { text: "In September it begins to withdraw from the north-west, and by winter the wind has turned back again.", s: { season: 0, day: 330, cam: [75, 12, 1.0], heat: 0, jet: 0 } }
+  ];
+  const KEYS = ["season", "day", "heat", "jet", "arms"];
+  const WPS = 2.5;
+  let acc = 0;
+  for (const l of SCRIPT) { l.dur = l.text.split(/\s+/).length / WPS + 1.6; l.t0 = acc; acc += l.dur; for (const k of KEYS) l.s[k] ??= 0; }
+  const TOTAL = acc + 1.5;
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+  function stateAt(t) {
+    const i = lineAt(t), L = SCRIPT[i], P = i ? SCRIPT[i - 1].s : SCRIPT[0].s, k = ease((t - L.t0) / (L.dur * .7)), o = {};
+    for (const key of KEYS) o[key] = lerp(P[key], L.s[key], k);
+    o.lon = lerp(P.cam[0], L.s.cam[0], k); o.lat = lerp(P.cam[1], L.s.cam[1], k); o.zoom = Math.exp(lerp(Math.log(P.cam[2]), Math.log(L.s.cam[2]), k));
+    // dates run forward through the year: the last line goes from early July to November
+    if (i === SCRIPT.length - 1) o.day = lerp(P.day, L.s.day, Math.max(0, Math.min(1, (t - L.t0) / L.dur)));
+    o.line = i;
+    return o;
+  }
+
+  /* ---------- geography, lon/lat (approximate) ---------- */
+  const ASIA = [[61.5, 25.2], [66.6, 25.4], [67.5, 24.3], [68.4, 23.5], [69.0, 22.6], [70.2, 22.9], [69.2, 22.3], [69.6, 21.6], [70.4, 20.9], [71.0, 20.7], [72.2, 21.4], [72.6, 22.3], [72.8, 21.1], [72.8, 19.0], [73.3, 17.0], [73.8, 15.5], [74.6, 13.0], [75.4, 11.8], [76.2, 10.0], [76.9, 8.5], [77.5, 8.1], [78.1, 8.8], [79.1, 9.3], [79.3, 10.3], [79.8, 11.9], [80.3, 13.1], [80.1, 15.0], [81.2, 16.3], [82.3, 16.8], [83.3, 17.7], [84.9, 19.3], [86.1, 19.8], [86.9, 20.6], [87.5, 21.6], [88.2, 21.7], [89.5, 21.9], [90.5, 22.2], [91.8, 22.4], [92.3, 20.8], [93.6, 19.4], [94.2, 18.0], [94.5, 16.0], [95.3, 15.8], [97.0, 16.5], [97.6, 15.0], [98.5, 12.0], [98.7, 10.0], [100.5, 7.5], [101, 6.5], [103, 5.5], [104, 1.5], [106, 1.5], [106, 40], [40, 40], [40, 27], [48, 29.8], [50.5, 26.5], [51.6, 24.2], [53.5, 24.0], [56.3, 24.5], [56.4, 26.2], [57.3, 25.7], [59.0, 25.4]];
+  const ARABIA = [[43.3, 12.7], [45.0, 12.8], [49.0, 14.5], [52.0, 15.6], [55.0, 17.2], [57.7, 18.9], [59.8, 22.5], [58.5, 23.6], [56.3, 24.5], [53.5, 24.0], [51.6, 24.2], [50.5, 26.5], [48, 29.8], [40, 27], [36, 27], [36, 20], [39, 16], [42, 14]];
+  const AFRICA = [[43.3, 11.6], [44.0, 10.4], [51.2, 11.8], [49.8, 7.5], [48.0, 4.5], [45.4, 2.0], [42.0, -1.0], [40.2, -3.0], [39.3, -6.8], [40.0, -10.5], [40.5, -16], [35, -16], [35, 13], [38, 17], [40, 15]];
+  const LANKA = [[79.9, 9.8], [80.2, 9.8], [81.2, 8.5], [81.9, 7.3], [81.6, 6.4], [80.6, 5.9], [80.0, 6.6], [79.8, 7.9]];
+  const SUMATRA = [[95.3, 5.6], [97.5, 5.2], [100.3, 2.3], [103.5, -1.0], [106, -3.5], [106, -6], [104.5, -5.8], [101, -2.5], [98.5, 1.5], [95.5, 4.5]];
+  const MADAGASCAR = [[49.3, -12.0], [50.4, -15.5], [49.5, -16], [44.5, -16], [46.5, -15.5], [47.8, -13.5]];
+  const LANDS = [ASIA, ARABIA, AFRICA, LANKA, SUMATRA, MADAGASCAR];
+  const inPoly = (x, y, P) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const [xi, yi] = P[i], [xj, yj] = P[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+  // a quarter-degree land mask, so the wind can ask "over land?" cheaply for thousands of particles
+  const MASK = new Uint8Array(300 * 240);
+  for (let j = 0; j < 240; j++) for (let i = 0; i < 300; i++) { const x = 33 + i * .25, y = -20 + j * .25; MASK[j * 300 + i] = LANDS.some(P => inPoly(x, y, P)) ? 1 : 0; }
+  const onLand = (x, y) => { const i = Math.floor((x - 33) * 4), j = Math.floor((y + 20) * 4); return i >= 0 && i < 300 && j >= 0 && j < 240 && MASK[j * 300 + i] === 1; };
+  const GHATS = [[73.4, 20.5], [73.6, 18.5], [73.8, 16.5], [74.2, 14.5], [75.2, 12.5], [76.5, 10.5], [77.2, 9.0]];
+  const HIMALAYA = [[72.5, 35], [74.5, 34.2], [77, 32.6], [79, 30.8], [81, 29.6], [83.5, 28.6], [86, 27.9], [88.5, 27.7], [91, 27.8], [93.5, 28.2], [95.5, 28.6]];
+  // normal onset of the monsoon (IMD normals, simplified): each line runs west to east
+  const ONSET = [
+    { day: 152, label: "1 JUN", pts: [[74.6, 12.6], [76.5, 12.0], [78.2, 10.8], [79.5, 10.0]] },
+    { day: 161, label: "10 JUN", pts: [[72.8, 18.8], [75.5, 18.3], [78.5, 17.8], [81.5, 19.0], [84.5, 21.0], [87.5, 23.4], [90.5, 25.5], [93.5, 27.0]] },
+    { day: 171, label: "20 JUN", pts: [[70.3, 21.6], [73.5, 22.6], [77.0, 23.2], [80.5, 24.6], [83.5, 26.6], [86.5, 27.6]] },
+    { day: 181, label: "30 JUN", pts: [[68.6, 23.6], [71.8, 25.3], [75.2, 27.3], [77.2, 28.6], [79.0, 30.0], [80.5, 30.6]] },
+    { day: 189, label: "8 JUL", pts: [[66.8, 25.8], [69.0, 27.8], [71.2, 30.0], [73.6, 32.4], [75.5, 33.5]] }
+  ];
+  const sideOf = (x, y, pts) => { // which side of a west-east polyline a point lies on: covered if south (right of travel)
+    let best = 1e9, sgn = 1;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[i + 1], dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      const u = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)), px = ax + u * dx, py = ay + u * dy, d = Math.hypot(x - px, y - py);
+      if (d < best) { best = d; sgn = dx * (y - ay) - dy * (x - ax) < 0 ? 1 : -1; }
+    }
+    // beyond the ends of a line, extend it straight
+    return sgn;
+  };
+  // India's land, with the day the monsoon reaches each quarter-degree cell
+  const INDIA = [[68.2, 23.6], [70.4, 25.8], [70.0, 27.6], [72.0, 29.2], [73.8, 30.6], [74.6, 32.6], [74.0, 34.6], [76.0, 35.6], [78.6, 34.6], [78.8, 32.4], [80.4, 30.6], [82.0, 29.6], [84.2, 28.4], [86.5, 27.9], [88.1, 27.6], [89.6, 26.8], [92.0, 27.6], [95.2, 29.2], [97.2, 27.8], [95.4, 25.6], [94.2, 23.6], [93.2, 22.0], [92.4, 21.4], [88.0, 21.2], [80, 5], [76, 5], [70, 15]];
+  const GX0 = 66, GY1 = 37, GN_X = 128, GN_Y = 128, GSTEP = .25;
+  const ONSET_DAY = new Float32Array(GN_X * GN_Y).fill(-1);
+  let cellCount = 0;
+  for (let j = 0; j < GN_Y; j++) for (let i = 0; i < GN_X; i++) {
+    const x = GX0 + (i + .5) * GSTEP, y = GY1 - (j + .5) * GSTEP;
+    if (!inPoly(x, y, INDIA) || !(inPoly(x, y, ASIA) || inPoly(x, y, LANKA))) continue;
+    let day = 194;
+    for (const o of ONSET) if (sideOf(x, y, o.pts) > 0) { day = o.day; break; }
+    if (x > 89.5 && y > 23.5) day = Math.min(day, 157);
+    ONSET_DAY[j * GN_X + i] = day; cellCount++;
+  }
+  const wetCanvas = document.createElement("canvas"); wetCanvas.width = GN_X; wetCanvas.height = GN_Y;
+  const wetCtx = wetCanvas.getContext("2d"), wetImg = wetCtx.createImageData(GN_X, GN_Y);
+  for (let k = 0; k < GN_X * GN_Y; k++) { wetImg.data[k * 4] = 95; wetImg.data[k * 4 + 1] = 201; wetImg.data[k * 4 + 2] = 160; }
+
+  /* ---------- wind: a schematic of the seasonal mean flow ---------- */
+  const gauss = (x, y, cx, cy, sx, sy) => Math.exp(-((x - cx) ** 2) / (2 * sx * sx) - ((y - cy) ** 2) / (2 * sy * sy));
+  function wind(x, y, S) {
+    const s = S.season;
+    // winter: north-east everywhere north of the equator, south-east trades to the south
+    let wu = -.75, wv = -.55;
+    const south = 1 - Math.max(0, Math.min(1, (y + 4) / 8));
+    wu = lerp(wu, -.8, south); wv = lerp(wv, .2, south);
+    // summer: SE trades → cross-equatorial Somali jet → westerly over the Arabian Sea → SW over the Bay → easterly along the Himalaya
+    let su = -.7, sv = .45;
+    const jet = gauss(x, y, 48, 5, 5, 7) * 1.0, arab = gauss(x, y, 66, 13, 12, 6), bay = gauss(x, y, 88, 14, 7, 6), plain = gauss(x, y, 84, 25, 9, 3);
+    const n = Math.max(0, Math.min(1, (y + 2) / 6));
+    su = lerp(su, .95, n); sv = lerp(sv, .35, n);
+    su = lerp(su, .35, jet); sv = lerp(sv, 1.25, jet);
+    su = lerp(su, 1.15, arab); sv = lerp(sv, .3, arab);
+    su = lerp(su, .45, bay); sv = lerp(sv, .95, bay);
+    su = lerp(su, -.8, plain); sv = lerp(sv, .05, plain);
+    let u = lerp(wu, su, s), v = lerp(wv, sv, s);
+    if (onLand(x, y)) { u *= .55; v *= .55; }
+    // heat low over the north in late spring draws air in
+    if (S.heat > 0) { const h = gauss(x, y, 76, 27, 7, 4) * S.heat; u += (76 - x) * .05 * h; v += (27 - y) * .05 * h; }
+    return [u, v];
+  }
+
+  /* ---------- canvas, projection ---------- */
+  const cv = document.getElementById("c"), g = cv.getContext("2d"), stage = document.getElementById("stage");
+  const trail = document.createElement("canvas"), tg = trail.getContext("2d");
+  let W = 1, H = 1, DPR = 1;
+  function resize() { DPR = Math.min(2, devicePixelRatio || 1); W = stage.clientWidth; H = stage.clientHeight; cv.width = trail.width = W * DPR; cv.height = trail.height = H * DPR; tg.fillStyle = "#08131f"; }
+  addEventListener("resize", resize); resize();
+  let cam = { lon: 75, lat: 12, zoom: 1 };
+  const scale = () => Math.min(W / 52, H / 38) * cam.zoom * DPR * Math.cos(15 * Math.PI / 180);
+  const X = lon => (lon - cam.lon) * scale() + W * DPR / 2, Y = lat => (cam.lat - lat) * scale() * 1.035 + H * DPR / 2;
+  const toLon = px => (px - W * DPR / 2) / scale() + cam.lon, toLat = py => cam.lat - (py - H * DPR / 2) / (scale() * 1.035);
+
+  /* ---------- particles ---------- */
+  const N = 3800, PX = new Float32Array(N), PY = new Float32Array(N), AGE = new Float32Array(N);
+  const spawn = i => { PX[i] = 34 + Math.random() * 74; PY[i] = -18 + Math.random() * 56; AGE[i] = Math.random() * 90; };
+  for (let i = 0; i < N; i++) spawn(i);
+
+  function frame(t, dt) {
+    const S = stateAt(t);
+    const moved = Math.abs(cam.lon - S.lon) + Math.abs(cam.lat - S.lat) + Math.abs(cam.zoom - S.zoom) > .002;
+    cam = { lon: S.lon, lat: S.lat, zoom: S.zoom };
+    const k = scale();
+    // trails: fade the previous frame, then draw this step of every particle
+    tg.globalCompositeOperation = "destination-out"; tg.fillStyle = `rgba(0,0,0,${moved ? .28 : .085})`; tg.fillRect(0, 0, trail.width, trail.height); tg.globalCompositeOperation = "source-over";
+    tg.lineWidth = 1.1 * DPR; tg.lineCap = "round";
+    // particles are batched by brightness so each frame is a handful of strokes, not thousands
+    const step = dt * 3.2, NB = 6, buckets = [...Array(NB * 2)].map(() => new Path2D());
+    for (let i = 0; i < N; i++) {
+      const x = PX[i], y = PY[i], [u, v] = wind(x, y, S), sp = Math.hypot(u, v);
+      const nx = x + u * step, ny = y + v * step;
+      const a = Math.max(0, Math.min(1, AGE[i] / 12) * Math.min(1, (120 - AGE[i]) / 20));
+      const lit = S.jet * gauss(x, y, 48, 5, 5, 7) + S.arms * (gauss(x, y, 73, 15, 3, 5) + gauss(x, y, 88, 18, 4, 5));
+      const b = Math.min(NB - 1, Math.floor(a * (.4 + .6 * Math.min(1, sp / 1.2)) * NB)) + (lit > .25 ? NB : 0);
+      const p = buckets[b]; p.moveTo(X(x), Y(y)); p.lineTo(X(nx), Y(ny));
+      if (step > 0) { PX[i] = nx; PY[i] = ny; AGE[i] += dt * 30; }
+      if (AGE[i] > 120 || nx < 33 || nx > 108 || ny < -19 || ny > 39) spawn(i), AGE[i] = 0;
+    }
+    for (let b = 0; b < NB * 2; b++) { const lv = ((b % NB) + 1) / NB; tg.strokeStyle = b >= NB ? `rgba(242,178,92,${.25 + .75 * lv})` : `rgba(232,238,242,${.1 + .62 * lv})`; tg.stroke(buckets[b]); }
+    // the map
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const bg = g.createRadialGradient(W * DPR * .55, H * DPR * .6, 0, W * DPR * .55, H * DPR * .6, Math.max(W, H) * DPR * .8);
+    bg.addColorStop(0, "#0d1e2e"); bg.addColorStop(1, "#060d16"); g.fillStyle = bg; g.fillRect(0, 0, cv.width, cv.height);
+    // graticule
+    g.strokeStyle = "rgba(138,160,173,.10)"; g.lineWidth = DPR;
+    for (let lon = 30; lon <= 110; lon += 10) { g.beginPath(); g.moveTo(X(lon), 0); g.lineTo(X(lon), cv.height); g.stroke(); }
+    for (let lat = -20; lat <= 40; lat += 10) { g.beginPath(); g.moveTo(0, Y(lat)); g.lineTo(cv.width, Y(lat)); g.stroke(); }
+    g.strokeStyle = "rgba(242,178,92,.22)"; g.setLineDash([6 * DPR, 6 * DPR]); g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(cv.width, Y(0)); g.stroke(); g.setLineDash([]);
+    label("EQUATOR", 96, .6, 10, "rgba(242,178,92,.5)", "start");
+    // land, with a soft light edge
+    for (const P of LANDS) {
+      g.beginPath(); P.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.closePath();
+      g.fillStyle = "#262620"; g.fill(); g.strokeStyle = "rgba(232,238,242,.35)"; g.lineWidth = 1.1 * DPR; g.stroke();
+    }
+    // heat over the northern plains in May
+    if (S.heat > .01) { const hx = X(78), hy = Y(26), r = 9 * k; const hg = g.createRadialGradient(hx, hy, 0, hx, hy, r); hg.addColorStop(0, `rgba(242,120,60,${.45 * S.heat})`); hg.addColorStop(1, "rgba(242,120,60,0)"); g.fillStyle = hg; g.fillRect(hx - r, hy - r * .7, r * 2, r * 1.4); }
+    // where the monsoon has arrived, the land turns green: a soft field, clipped crisply to the coast
+    {
+      const fade = S.line === SCRIPT.length - 1 ? Math.max(0, 1 - Math.max(0, S.day - 258) / 40) : 1;
+      for (let k = 0; k < GN_X * GN_Y; k++) { const d = ONSET_DAY[k]; wetImg.data[k * 4 + 3] = d < 0 || S.season <= .5 ? 0 : Math.round(105 * fade * Math.max(0, Math.min(1, (S.day - d) / 5))); }
+      wetCtx.putImageData(wetImg, 0, 0);
+      g.save(); g.beginPath();
+      for (const P of [ASIA, LANKA]) P.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)));
+      g.clip(); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+      g.drawImage(wetCanvas, X(GX0), Y(GY1), GN_X * GSTEP * k, GN_Y * GSTEP * k * 1.035);
+      g.restore();
+    }
+    // mountains: the Ghats and the Himalaya as hatched ridges
+    ridge(GHATS, 5); ridge(HIMALAYA, 7);
+    // onset lines appear as their dates arrive
+    for (const o of ONSET) {
+      const a = S.season > .5 ? Math.max(0, Math.min(1, (S.day - o.day + 3) / 4)) * (S.line === SCRIPT.length - 1 ? .35 : 1) : 0;
+      if (a <= 0) continue;
+      g.strokeStyle = `rgba(242,178,92,${.9 * a})`; g.lineWidth = 1.6 * DPR; g.setLineDash([7 * DPR, 5 * DPR]);
+      g.beginPath(); o.pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.stroke(); g.setLineDash([]);
+      const [lx, ly] = o.pts[0]; g.globalAlpha = a; label(o.label, lx - .3, ly + .15, 11, "#f2b25c", "end"); g.globalAlpha = 1;
+    }
+    g.drawImage(trail, 0, 0);
+    // names
+    label("ARABIAN SEA", 63.5, 15, 13, "rgba(138,160,173,.75)", "middle", 3);
+    label("BAY OF BENGAL", 88, 14.5, 13, "rgba(138,160,173,.75)", "middle", 3);
+    label("INDIAN OCEAN", 75, -8, 13, "rgba(138,160,173,.6)", "middle", 4);
+    label("HIMALAYA", 84.5, 30.6, 11, "rgba(232,238,242,.55)", "middle", 3);
+    label("WESTERN GHATS", 72.2, 14.2, 10, "rgba(232,238,242,.5)", "end", 2);
+    for (const [n, x, y] of [["Mumbai", 72.85, 19.05], ["Kolkata", 88.36, 22.57], ["Delhi", 77.2, 28.6], ["Chennai", 80.27, 13.08], ["Thiruvananthapuram", 76.95, 8.5]]) { g.fillStyle = "#e8eef2"; g.beginPath(); g.arc(X(x), Y(y), 2.2 * DPR, 0, 7); g.fill(); label(n, x + .45, y - .1, 11, "rgba(232,238,242,.8)", "start"); }
+    return S;
+  }
+  function ridge(P, n) {
+    g.strokeStyle = "rgba(232,238,242,.28)"; g.lineWidth = 1 * DPR;
+    for (let i = 0; i < P.length - 1; i++) { const [ax, ay] = P[i], [bx, by] = P[i + 1]; for (let j = 0; j < n; j++) { const u = j / n, x = ax + (bx - ax) * u, y = ay + (by - ay) * u; g.beginPath(); g.moveTo(X(x - .35), Y(y - .2)); g.lineTo(X(x), Y(y + .35)); g.lineTo(X(x + .35), Y(y - .2)); g.stroke(); } }
+  }
+  function label(t, x, y, size, col, align = "start", ls = 0) {
+    g.font = `500 ${size * DPR}px "IBM Plex Mono", monospace`; g.fillStyle = col; g.textAlign = align; g.textBaseline = "middle";
+    if (ls) { g.letterSpacing = ls * DPR + "px"; } g.fillText(t, X(x), Y(y)); if (ls) g.letterSpacing = "0px";
+  }
+
+  /* ---------- clock and controls ---------- */
+  const sub = document.getElementById("sub"), readout = document.getElementById("readout"), playB = document.getElementById("play"), bar = document.getElementById("bar"), btns = [];
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const dateOf = d => { const dt = new Date(Date.UTC(2023, 0, 1 + Math.round(d))); return dt.getUTCDate() + " " + MONTHS[dt.getUTCMonth()]; };
+  let clock = 0, playing = true, last = performance.now(), shown = -1;
+  function show(S, t) {
+    const li = t < TOTAL - 1 ? S.line : -1;
+    if (li !== shown) { shown = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = shown >= 0 ? SCRIPT[shown].text : ""; sub.style.opacity = 1; }, 220); btns.forEach((b, i) => b.setAttribute("aria-pressed", i === li)); }
+    let wet = 0; if (S.season > .5) for (let k = 0; k < ONSET_DAY.length; k++) if (ONSET_DAY[k] >= 0 && ONSET_DAY[k] <= S.day) wet++;
+    const covered = wet / cellCount;
+    readout.innerHTML = `<b>${dateOf(S.day)}</b>${S.season < .3 ? "NORTH-EAST WINDS" : S.season > .7 ? "SOUTH-WEST MONSOON" : "WINDS TURNING"}${S.season > .5 && S.line < SCRIPT.length - 1 ? ` · ${Math.round(covered * 100)}% OF INDIA` : ""}`;
+  }
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; clock = SCRIPT[6].t0 + 1; }
+  function loop(now) { requestAnimationFrame(loop); const dt = Math.min(.05, (now - last) / 1000); last = now; if (playing) clock = (clock + dt) % TOTAL; show(frame(clock, playing ? dt : 0), clock); }
+  window.MONSOON = { seek: t => { playing = false; clock = t; for (let i = 0; i < 60; i++) frame(t, 1 / 60); show(frame(t, 1 / 60), t); }, SCRIPT, TOTAL };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

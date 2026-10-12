@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Persian Wheel Sheet</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital@0;1&family=Libre+Caslon+Display&display=swap">
+<style>
+/* Layout: one patent sheet, ink on white paper, filling the screen; the camera moves over the drawing. Single light look by choice. */
+:root{--paper:#f6f3ea;--ink:#1d1b18;--soft:#6d675c;--serif:"Libre Caslon Text",Georgia,serif;--display:"Libre Caslon Display",Georgia,serif;color-scheme:light}
+html,body{height:100%;margin:0}
+body{background:#d9d4c7;color:var(--ink);font-family:var(--serif);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden;background:var(--paper)}
+svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:5%;transform:translateX(-50%);width:min(840px,86%);text-align:center;font-style:italic;font-size:clamp(15px,1.9vw,22px);line-height:1.4;color:var(--ink);text-shadow:0 0 8px var(--paper),0 0 3px var(--paper),0 0 1px var(--paper);transition:opacity .5s;pointer-events:none}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:#d9d4c7;font:13px var(--serif);color:#4a463e}
+.bar button{font:13px var(--serif);color:var(--ink);background:var(--paper);border:1px solid #a49d8c;border-radius:2px;padding:3px 10px;cursor:pointer}
+.bar button:hover{border-color:var(--ink)}
+.bar button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.bar button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.bar .note{margin-left:auto;font-style:italic}
+</style>
+</head>
+<body>
+<div id="stage"><svg id="sheet" aria-label="Patent-style drawing of a Persian wheel, a bullock-driven well for lifting water"></svg><div id="sub"></div></div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">An illustrative drawing in the style of a patent sheet, not a real patent.</span></div>
+<script>
+(() => {
+  /* ---------- narration ---------- */
+  const SCRIPT = [
+    { text: "The Persian wheel, the rahat, lifted water from wells across northern India for centuries.", s: { cam: [520, 370, 1080], hl: [] } },
+    { text: "A bullock walks in a circle, turning an upright shaft.", s: { cam: [300, 240, 560], hl: [1, 2, 3] } },
+    { text: "Pegs on a large horizontal wheel drive a small upright wheel at right angles, so the turn changes direction and speeds up threefold.", s: { cam: [380, 210, 340], hl: [4, 5] } },
+    { text: "A long axle carries it out over the well to a drum.", s: { cam: [590, 220, 560], hl: [6, 7] } },
+    { text: "An endless chain of pots runs over the drum, down into the well and back. They go down empty and come up full.", s: { cam: [730, 360, 620], hl: [8, 9, 10] } },
+    { text: "At the top each pot tips over and empties into a trough that runs off to the fields.", s: { cam: [820, 230, 420], hl: [11] } },
+    { text: "A ratchet and pawl on the axle stops the loaded chain running backwards whenever the bullock rests.", s: { cam: [660, 200, 300], hl: [12] } },
+    { text: "Wood, rope and clay: a machine any village carpenter could build and mend.", s: { cam: [520, 370, 1080], hl: [] } }
+  ];
+  const WPS = 2.5;
+  let acc = 0;
+  for (const l of SCRIPT) { l.dur = l.text.split(/\s+/).length / WPS + 1.8; l.t0 = acc; acc += l.dur; }
+  const TOTAL = acc + 1.5;
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+
+  /* ---------- oblique projection: x right, y into the page, z up ---------- */
+  const OX = 360, OY = 300, KY = .45, CA = Math.cos(Math.PI / 6), SA = Math.sin(Math.PI / 6);
+  const P = (x, y, z) => [OX + x + y * KY * CA, OY - z - y * KY * SA];
+  const pts = a => a.map(p => P(...p)).map(([x, y], i) => (i ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1)).join("");
+  const ring = (cx, cy, cz, r, plane, n = 48, a0 = 0, a1 = Math.PI * 2) => { // plane: "xy" (horizontal) or "yz" (upright, across the axle)
+    const out = [];
+    for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n, c = Math.cos(a) * r, s = Math.sin(a) * r; out.push(plane === "xy" ? [cx + c, cy + s, cz] : [cx, cy + c, cz + s]); }
+    return out;
+  };
+
+  /* ---------- the machine's numbers ---------- */
+  const SHAFT = [0, 0], CROWN = { z: 96, r: 64, pegs: 24 }, LANT = { x: 64, z: 118, r: 21, staves: 8 };
+  const AXLE = { z: 118, x0: 40, x1: 452 }, DRUM = { x: 400, r: 44, w: 34, rungs: 14 }, WELL = { x: 400, r: 74, wall: 14, depth: 240, water: 196 };
+  const RATIO = CROWN.pegs / LANT.staves;      // the drum turns three times for each turn of the shaft
+  const SWEEP = { z: 160, r: 170 };
+  // the chain loop lies in the y-z plane under the drum: over the top, down the front, round the bottom, up the back
+  const LOOP_BOT = -WELL.water - 26, LOOP_R = DRUM.r;
+  const loopLen = Math.PI * LOOP_R + 2 * (AXLE.z - LOOP_BOT) + Math.PI * LOOP_R;
+  function loopAt(s) { // position and travel direction along the loop, s in [0, loopLen)
+    s = ((s % loopLen) + loopLen) % loopLen;
+    const top = Math.PI * LOOP_R, run = AXLE.z - LOOP_BOT;
+    if (s < top) { const a = Math.PI - s / LOOP_R; return { p: [DRUM.x, Math.cos(a) * LOOP_R, AXLE.z + Math.sin(a) * LOOP_R], d: [0, Math.sin(a), -Math.cos(a)], side: "top" }; }
+    s -= top;
+    if (s < run) return { p: [DRUM.x, LOOP_R, AXLE.z - s], d: [0, 0, -1], side: "down" };
+    s -= run;
+    if (s < top) { const a = -s / LOOP_R; return { p: [DRUM.x, Math.cos(a) * LOOP_R, LOOP_BOT + Math.sin(a) * LOOP_R], d: [0, Math.sin(a), Math.cos(a)].map(v => -v), side: "bottom" }; }
+    s -= top;
+    return { p: [DRUM.x, -LOOP_R, LOOP_BOT + s], d: [0, 0, 1], side: "up" };
+  }
+
+  /* ---------- svg ---------- */
+  const NS = "http://www.w3.org/2000/svg", svg = document.getElementById("sheet");
+  const el = (tag, at = {}, parent = svg) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(at)) e.setAttribute(k, v); parent.appendChild(e); return e; };
+  const line = (d, w = 1.1, parent = svg, extra = {}) => el("path", { d, fill: "none", stroke: "var(--ink)", "stroke-width": w, "vector-effect": "non-scaling-stroke", "stroke-linecap": "round", "stroke-linejoin": "round", ...extra }, parent);
+  const solid = (d, parent = svg, w = 1.1) => el("path", { d, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": w, "vector-effect": "non-scaling-stroke", "stroke-linejoin": "round" }, parent);
+  const defs = el("defs");
+  defs.innerHTML = `
+    <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5" stroke="#1d1b18" stroke-width=".55"/></pattern>
+    <pattern id="hatchFine" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><line x1="0" y1="0" x2="0" y2="3" stroke="#1d1b18" stroke-width=".4"/></pattern>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="3"/><feColorMatrix values="0 0 0 0 .3  0 0 0 0 .27  0 0 0 0 .2  0 0 0 .07 0"/></filter>`;
+  el("rect", { x: -400, y: -400, width: 1900, height: 1600, fill: "var(--paper)" });
+  // sheet border, title block and the usual patent-office furniture
+  const SHEET = { x: 20, y: 20, w: 1000, h: 680 };
+  const furniture = el("g", { "data-keep": 1 });
+  line(`M${SHEET.x},${SHEET.y}h${SHEET.w}v${SHEET.h}h${-SHEET.w}Z`, 1.6, furniture);
+  line(`M${SHEET.x + 6},${SHEET.y + 6}h${SHEET.w - 12}v${SHEET.h - 12}h${-SHEET.w + 12}Z`, .6, furniture);
+  const text = (t, x, y, size, at = {}, parent = furniture) => { const e = el("text", { x, y, "font-size": size, fill: "var(--ink)", "font-family": "Libre Caslon Text", ...at }, parent); e.textContent = t; return e; };
+  text("(No Model.)", 40, 52, 11, { "font-style": "italic" });
+  text("2 Sheets—Sheet 1.", 1000, 52, 11, { "text-anchor": "end" });
+  text("PERSIAN WHEEL.", 520, 64, 26, { "text-anchor": "middle", "font-family": "Libre Caslon Display", "letter-spacing": 4 });
+  text("WATER-RAISING APPARATUS, WORKED BY A BULLOCK.", 520, 86, 11, { "text-anchor": "middle", "letter-spacing": 2 });
+  text("Fig. 1.", 60, 140, 17, { "font-style": "italic" });
+  text("Witnesses:", 60, 640, 11, { "font-style": "italic" }); line("M60,664h150M60,682h150", .5, furniture);
+  text("Inventor:", 860, 640, 11, { "font-style": "italic" }); text("Traditional", 880, 668, 14, { "font-style": "italic" });
+  // ground line and the earth cut round the well
+  const ground = el("g");
+  const gL = P(-260, 0, 0), gR = P(640, 0, 0);
+  line(`M${gL[0]},${gL[1]}L${gR[0]},${gR[1]}`, 1.2, ground);
+  // ground plane edge lines going back
+  line(pts([[-260, -140, 0], [640, -140, 0]]), .5, ground, { "stroke-dasharray": "2 4" });
+  // section of earth: the well's front half is cut away, the cut faces hatched as a draughtsman would
+  const W = WELL, ring2 = (r, z, a0, a1) => ring(W.x, 0, z, r, "xy", 40, a0, a1);
+  const cutFace = (side) => { // the cut through the wall on one side of the well, from ground to the bottom
+    const y0 = 0, x0 = W.x + side * W.r, x1 = W.x + side * (W.r + W.wall);
+    return pts([[x0, y0, 0], [x1, y0, 0], [x1, y0, -W.depth], [x0, y0, -W.depth]]) + "Z";
+  };
+  el("path", { d: pts([[W.x - W.r - W.wall - 50, 0, 0], [W.x + W.r + W.wall + 50, 0, 0], [W.x + W.r + W.wall + 50, 0, -W.depth - 30], [W.x - W.r - W.wall - 50, 0, -W.depth - 30]]) + "Z", fill: "url(#hatchFine)", opacity: .55 }, ground);
+  // the back half of the well wall, seen through the cut: brick courses
+  el("path", { d: pts(ring2(W.r, 0, Math.PI, Math.PI * 2).concat(ring2(W.r, -W.depth, Math.PI * 2, Math.PI))) + "Z", fill: "var(--paper)" }, ground);
+  for (let z = -10; z > -W.depth; z -= 12) line(pts(ring2(W.r, z, Math.PI, Math.PI * 2)), .45, ground);
+  for (let z = -10, row = 0; z > -W.depth; z -= 12, row++) for (let a = Math.PI + (row % 2) * .09; a < Math.PI * 2; a += .18) { const c = Math.cos(a) * W.r, s = Math.sin(a) * W.r; line(pts([[W.x + c, s, z], [W.x + c, s, z - 12]]), .35, ground); }
+  for (const s of [-1, 1]) { el("path", { d: cutFace(s), fill: "url(#hatch)", stroke: "var(--ink)", "stroke-width": 1, "vector-effect": "non-scaling-stroke" }, ground); }
+  line(pts(ring2(W.r + W.wall, 0, Math.PI, Math.PI * 2)), 1.1, ground); line(pts(ring2(W.r, 0, Math.PI, Math.PI * 2)), 1.1, ground);
+  // the well head kerb behind
+  // water: a surface with ripple lines
+  const water = el("g");
+  solid(pts(ring2(W.r, -W.water, 0, Math.PI * 2)) + "Z", water, .9);
+  for (let i = 1; i < 5; i++) line(pts(ring(W.x, 0, -W.water, W.r * (.2 + i * .17), "xy", 40, Math.PI * 1.1, Math.PI * 1.9)), .4, water);
+  line(pts([[W.x - W.r, 0, -W.water - 6], [W.x + W.r, 0, -W.water - 6]]), .4, water, { "stroke-dasharray": "6 5" });
+  // trough: a wooden channel under the front of the drum, running out to the right
+  const trough = el("g");
+  const TR = { x0: 360, x1: 640, y: 30, z: 84, w: 26, d: 14 };
+  solid(pts([[TR.x0, TR.y - TR.w / 2, TR.z], [TR.x1, TR.y - TR.w / 2, TR.z - 26], [TR.x1, TR.y + TR.w / 2, TR.z - 26], [TR.x0, TR.y + TR.w / 2, TR.z]]) + "Z", trough);
+  solid(pts([[TR.x0, TR.y + TR.w / 2, TR.z], [TR.x1, TR.y + TR.w / 2, TR.z - 26], [TR.x1, TR.y + TR.w / 2, TR.z - 26 - TR.d], [TR.x0, TR.y + TR.w / 2, TR.z - TR.d]]) + "Z", trough);
+  el("path", { d: pts([[TR.x0, TR.y + TR.w / 2, TR.z], [TR.x1, TR.y + TR.w / 2, TR.z - 26], [TR.x1, TR.y + TR.w / 2, TR.z - 26 - TR.d], [TR.x0, TR.y + TR.w / 2, TR.z - TR.d]]) + "Z", fill: "url(#hatchFine)", opacity: .6 }, trough);
+  for (const [x, h] of [[380, 60], [470, 47], [560, 36], [630, 26]]) line(pts([[x, TR.y + TR.w / 2, TR.z - (x - TR.x0) / (TR.x1 - TR.x0) * 26 - TR.d], [x, TR.y + TR.w / 2, 0]]), 1, trough);
+  const flow = line("", .7, trough, { "stroke-dasharray": "8 6" });
+
+  // live layers, in painter's order
+  const back = el("g"), mid = el("g"), front = el("g");
+  const furnitureTop = el("g");
+  // leaders and numbers
+  // each number sits a short way off its part, with a fine leader running to it
+  const LEADERS = [
+    [1, [0, 0, 178], [-46, -14]], [2, [-110, 0, SWEEP.z], [-30, -50]], [3, null, [-60, -70]], [4, [-40, -30, CROWN.z], [-80, 36]],
+    [5, [LANT.x, 0, LANT.z + LANT.r], [10, -58]], [6, [230, 0, AXLE.z + 4], [0, -56]], [7, [DRUM.x, -DRUM.r, AXLE.z + 30], [-10, -64]],
+    [8, [DRUM.x, -LOOP_R, -100], [-120, 20]], [9, [W.x + W.r + W.wall, 0, -150], [80, 30]], [10, [W.x - 40, 0, -W.water], [-110, 26]],
+    [11, [560, TR.y, TR.z - 18], [44, -50]], [12, [300, 0, AXLE.z + 18], [-46, -46]]
+  ];
+  const leaderEls = LEADERS.map(([n]) => { const g = el("g", {}, furnitureTop); const ln = line("", .6, g); const c = el("circle", { r: 0, fill: "none", stroke: "var(--ink)", "stroke-width": .9, "vector-effect": "non-scaling-stroke" }, g); const tx = el("text", { "font-size": 14, "font-style": "italic", "text-anchor": "middle", fill: "var(--ink)", "font-family": "Libre Caslon Text" }, g); tx.textContent = n; return { g, ln, c, tx }; });
+  el("rect", { x: -400, y: -400, width: 1900, height: 1600, filter: "url(#grain)", "pointer-events": "none" });
+
+  /* ---------- the moving parts, rebuilt each frame ---------- */
+  function draw(t, theta, hl, zf = 1) {
+    const H = n => hl.includes(n) ? 1.9 : 1.05;
+    back.innerHTML = ""; mid.innerHTML = ""; front.innerHTML = "";
+    const phi = -theta * RATIO;           // the lantern wheel, the axle and the drum
+    // vertical shaft
+    solid(pts([[-5, 0, 0], [-5, 0, 180], [5, 0, 180], [5, 0, 0]]) + "Z", mid, H(1));
+    line(pts(ring(0, 0, 180, 5, "xy", 16)), H(1), mid);
+    // crown wheel: a rim with spokes, and pegs standing up from it
+    const crownBack = [], crownFront = [];
+    for (let i = 0; i < CROWN.pegs; i++) { const a = theta + i * Math.PI * 2 / CROWN.pegs, x = Math.cos(a) * CROWN.r, y = Math.sin(a) * CROWN.r; (y < 0 ? crownBack : crownFront).push([x, y]); }
+    const rim = (z, w) => { solid(pts(ring(0, 0, z, CROWN.r + 6, "xy", 60)) + pts(ring(0, 0, z, CROWN.r - 6, "xy", 60).reverse()) + "Z", mid, w); };
+    for (const [x, y] of crownBack) line(pts([[x, y, CROWN.z], [x, y, CROWN.z + 12]]), H(4) * .9, mid);
+    rim(CROWN.z, H(4));
+    for (let i = 0; i < 4; i++) { const a = theta + i * Math.PI / 2; line(pts([[0, 0, CROWN.z], [Math.cos(a) * (CROWN.r - 6), Math.sin(a) * (CROWN.r - 6), CROWN.z]]), H(4), mid); }
+    for (const [x, y] of crownFront) { line(pts([[x, y, CROWN.z], [x, y, CROWN.z + 12]]), H(4) * 1.1, mid); }
+    // the sweep beam and the bullock walking round
+    const sa = theta, sx = Math.cos(sa) * SWEEP.r, sy = Math.sin(sa) * SWEEP.r;
+    const sweepEl = () => { solid(pts([[0, 0, SWEEP.z - 3], [sx, sy, SWEEP.z - 3], [sx, sy, SWEEP.z + 3], [0, 0, SWEEP.z + 3]]) + "Z", mid, H(2)); line(pts([[sx, sy, SWEEP.z], [sx, sy, 72]]), H(2) * .8, mid); };
+    const bull = bullock(sx, sy, sa + Math.PI / 2, t, H(3));
+    if (sy < 0) { bull(back); } sweepEl(); if (sy >= 0) bull(front);
+    // the lantern wheel: two discs joined by staves, turning in the y-z plane
+    const L = LANT;
+    for (const dx of [-7, 7]) solid(pts(ring(L.x + dx, 0, L.z, L.r, "yz", 32)) + "Z", mid, H(5));
+    for (let i = 0; i < L.staves; i++) { const a = phi + i * Math.PI * 2 / L.staves; line(pts([[L.x - 7, Math.cos(a) * (L.r - 3), L.z + Math.sin(a) * (L.r - 3)], [L.x + 7, Math.cos(a) * (L.r - 3), L.z + Math.sin(a) * (L.r - 3)]]), H(5), mid); }
+    // the axle, with the ratchet and its pawl
+    solid(pts([[AXLE.x0, -4, AXLE.z], [AXLE.x1, -4, AXLE.z], [AXLE.x1, 4, AXLE.z], [AXLE.x0, 4, AXLE.z]]) + "Z", mid, H(6));
+    line(pts([[AXLE.x0, 0, AXLE.z + 4], [AXLE.x1, 0, AXLE.z + 4]]), H(6) * .6, mid);
+    { const rx = 300, rr = 18, teeth = 12, d = [];
+      for (let i = 0; i <= teeth; i++) { const a = phi + i * Math.PI * 2 / teeth, a2 = a + Math.PI * 2 / teeth * .8; d.push([rx, Math.cos(a) * rr, AXLE.z + Math.sin(a) * rr], [rx, Math.cos(a2) * (rr - 6), AXLE.z + Math.sin(a2) * (rr - 6)]); }
+      solid(pts(d) + "Z", mid, H(12));
+      const tick = Math.abs(Math.sin(phi * teeth / 2)) * 4;
+      line(pts([[rx, -6, AXLE.z + 40], [rx, -2, AXLE.z + rr - 2 + tick]]), H(12) * 1.2, mid);
+      line(pts([[rx, -10, AXLE.z + 40], [rx, -10, 0]]), H(12) * .8, mid); }
+    // posts carrying the axle
+    for (const x of [200, 470]) { solid(pts([[x - 4, 0, 0], [x - 4, 0, AXLE.z - 4], [x + 4, 0, AXLE.z - 4], [x + 4, 0, 0]]) + "Z", mid, 1); }
+    // the drum: two rims with rungs, and the chain of pots looping over it into the well
+    const D = DRUM, pots = [], N = 26, spacing = loopLen / N, shift = -phi * D.r;
+    for (let i = 0; i < N; i++) pots.push(loopAt(i * spacing + shift));
+    const behind = pots.filter(q => q.p[1] < 0), before = pots.filter(q => q.p[1] >= 0);
+    // chain ropes (two strands either side of the pots)
+    for (const dx of [-12, 12]) { const r = []; for (let s = 0; s <= loopLen; s += 6) { const q = loopAt(s); r.push([q.p[0] + dx, q.p[1], q.p[2]]); } line(pts(r.filter(p => p[1] < 0)), H(8) * .6, back); }
+    for (const q of behind) pot(q, back, H(8));
+    for (const dx of [-D.w / 2, D.w / 2]) solid(pts(ring(D.x + dx, 0, AXLE.z, D.r, "yz", 40)) + "Z", mid, H(7));
+    for (let i = 0; i < D.rungs; i++) { const a = phi + i * Math.PI * 2 / D.rungs, c = Math.cos(a) * D.r, s = Math.sin(a) * D.r; if (c > -D.r * .2) line(pts([[D.x - D.w / 2, c, AXLE.z + s], [D.x + D.w / 2, c, AXLE.z + s]]), H(7), mid); }
+    for (let i = 0; i < 6; i++) { const a = phi + i * Math.PI / 3; line(pts([[D.x - D.w / 2, 0, AXLE.z], [D.x - D.w / 2, Math.cos(a) * (D.r - 3), AXLE.z + Math.sin(a) * (D.r - 3)]]), H(7) * .8, mid); }
+    line(pts(ring(D.x - D.w / 2, 0, AXLE.z, D.r - 6, "yz", 40)), H(7) * .5, mid);
+    for (const dx of [-12, 12]) { const r = []; for (let s = 0; s <= loopLen; s += 6) { const q = loopAt(s); if (q.p[1] >= 0) r.push([q.p[0] + dx, q.p[1], q.p[2]]); else if (r.length) { line(pts(r), H(8) * .7, front); r.length = 0; } } if (r.length) line(pts(r), H(8) * .7, front); }
+    for (const q of before) pot(q, front, H(8));
+    // water poured from pots as they turn over the top, into the trough
+    const spill = pots.filter(q => q.side === "top" && q.p[1] > 4);
+    for (const q of spill) {
+      const [x, y] = P(q.p[0], q.p[1] + 8, q.p[2] - 4), [, y2] = P(q.p[0], TR.y, TR.z);
+      for (const dx of [-3, 0, 3]) line(`M${(x + dx).toFixed(1)},${y.toFixed(1)}L${(x + dx * 1.6).toFixed(1)},${y2.toFixed(1)}`, .8, front, { "stroke-dasharray": "5 4", "stroke-dashoffset": (-t * 60 - dx * 3).toFixed(1) });
+    }
+    // the outflow down the trough
+    const f0 = P(TR.x0 + 30, TR.y, TR.z - 3), f1 = P(TR.x1, TR.y, TR.z - 29);
+    flow.setAttribute("d", `M${f0[0]},${f0[1]}L${f1[0]},${f1[1]}`); flow.setAttribute("stroke-dashoffset", (-t * 40).toFixed(1));
+    // leaders: emphasised when the narration is about that part
+    LEADERS.forEach(([n, at, lab], i) => {
+      const L = leaderEls[i], on = hl.includes(n), target = at ? P(...at) : P(sx * 1.05, sy * 1.05, 70);
+      const lx = target[0] + lab[0] * zf, ly = target[1] + lab[1] * zf;
+      L.tx.setAttribute("font-size", (14 * zf).toFixed(2));
+      L.ln.setAttribute("d", `M${(lx + lab[0] * -.18 * zf).toFixed(1)},${(ly + 2 * zf + lab[1] * -.12 * zf).toFixed(1)}L${target[0].toFixed(1)},${target[1].toFixed(1)}`);
+      L.ln.setAttribute("stroke-width", on ? 1.2 : .55);
+      L.tx.setAttribute("x", lx.toFixed(1)); L.tx.setAttribute("y", ly.toFixed(1));
+      L.tx.setAttribute("font-weight", on ? 700 : 400);
+      L.c.setAttribute("cx", lx.toFixed(1)); L.c.setAttribute("cy", (ly - 4.5 * zf).toFixed(1)); L.c.setAttribute("r", on ? 11 * zf : 0);
+    });
+  }
+  // a clay pot, its mouth facing the way the chain is travelling: up when rising (full), down when falling (empty)
+  function pot(q, parent, w) {
+    const [x, y] = P(...q.p), [dx, dy] = (() => { const a = P(q.p[0] + q.d[0], q.p[1] + q.d[1], q.p[2] + q.d[2]); return [a[0] - x, a[1] - y]; })();
+    const ang = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+    const g = el("g", { transform: `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${ang.toFixed(1)})` }, parent);
+    solid("M-7,-9 C-11,-4 -11,6 -6,9 L6,9 C11,6 11,-4 7,-9 L5,-12 L-5,-12 Z", g, w);
+    line("M-5,-12 L5,-12", w, g);
+    if (q.side === "up" || (q.side === "bottom" && q.p[1] < 0)) el("path", { d: "M-9,-2 C-9,4 -7,8 -5,8 L5,8 C7,8 9,4 9,-2 Z", fill: "url(#hatch)" }, g);
+  }
+  // a bullock in profile, as a draughtsman would draw it: body, legs that walk, head, horns, hump
+  function bullock(x, y, heading, t, w) {
+    return parent => {
+      const [px, py] = P(x, y, 0), dir = Math.cos(heading) * 1 + Math.sin(heading) * KY * CA >= 0 ? 1 : -1;
+      const g = el("g", { transform: `translate(${px.toFixed(1)} ${py.toFixed(1)}) scale(${dir * 1.15} 1.15)` }, parent);
+      const st = Math.sin(t * 5.2) * 6;
+      for (const [lx, ph] of [[-28, 0], [-20, Math.PI], [20, Math.PI], [28, 0]]) line(`M${lx},-40L${(lx + Math.sin(t * 5.2 + ph) * 6).toFixed(1)},0`, w, g);
+      solid("M-40,-62 C-46,-46 -40,-36 -30,-36 L30,-36 C40,-38 44,-48 42,-60 C40,-72 30,-74 18,-74 L-24,-74 C-34,-74 -38,-70 -40,-62 Z", g, w);
+      solid("M10,-74 C12,-86 22,-88 26,-76 Z", g, w); // hump
+      solid("M38,-66 L56,-58 C64,-56 66,-48 60,-44 L48,-44 C44,-46 40,-52 38,-56 Z", g, w); // head
+      line("M52,-60 C52,-70 58,-74 62,-72 M48,-60 C46,-70 50,-76 54,-76", w, g);
+      line("M-40,-60 C-48,-56 -50,-44 -48,-34", w * .8, g); // tail
+      for (let i = 0; i < 6; i++) line(`M${-30 + i * 10},-70 l2,8`, .4, g);
+      void st;
+    };
+  }
+
+  /* ---------- clock, camera and controls ---------- */
+  const sub = document.getElementById("sub"), stage = document.getElementById("stage"), playB = document.getElementById("play"), bar = document.getElementById("bar"), btns = [];
+  let clock = 0, playing = true, last = performance.now(), shown = -1;
+  function frame(t) {
+    const i = lineAt(t), L = SCRIPT[i], Pv = i ? SCRIPT[i - 1].s : SCRIPT[0].s, k = ease((t - L.t0) / (L.dur * .6));
+    const cx = lerp(Pv.cam[0], L.s.cam[0], k), cy = lerp(Pv.cam[1], L.s.cam[1], k), w = Math.exp(lerp(Math.log(Pv.cam[2]), Math.log(L.s.cam[2]), k));
+    const r = stage.clientWidth / Math.max(1, stage.clientHeight), h = w / r;
+    svg.setAttribute("viewBox", `${(cx - w / 2).toFixed(1)} ${(cy - h / 2).toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)}`);
+    draw(t, t * .55, L.s.hl, Math.max(.34, Math.min(1, w / 1080)));
+    if (i !== shown) { shown = i; sub.style.opacity = 0; setTimeout(() => { sub.textContent = SCRIPT[shown].text; sub.style.opacity = 1; }, 220); btns.forEach((b, j) => b.setAttribute("aria-pressed", j === i)); }
+  }
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; }
+  function loop(now) { requestAnimationFrame(loop); const dt = Math.min(.05, (now - last) / 1000); last = now; if (playing) clock = (clock + dt) % TOTAL; frame(clock); }
+  window.WHEEL = { seek: t => { playing = false; clock = t; frame(t); }, SCRIPT, TOTAL };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

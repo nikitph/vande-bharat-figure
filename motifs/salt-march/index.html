@@ -261,7 +261,7 @@ svg#map{position:absolute;inset:0;width:100%;height:100%;display:block}
     spread.forEach(s => { const a = Math.max(0, Math.min(1, (kp * 3 - s.d * 1.1))); s.e.setAttribute("opacity", (a * (t < SCRIPT[sp].t0 ? 0 : 1)).toFixed(2)); s.e.setAttribute("r", (.6 + a * .9).toFixed(2)); });
     // narration and readout
     const li = t < TOTAL - 2 ? lineAt(t) : -1;
-    if (li !== shownLine) { shownLine = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = li >= 0 ? SCRIPT[li].text : ""; sub.style.opacity = 1; }, li >= 0 ? 250 : 0); }
+    if (li !== shownLine) { shownLine = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = shownLine >= 0 ? SCRIPT[shownLine].text : ""; sub.style.opacity = 1; }, li >= 0 ? 250 : 0); }
     const day = k * 24, near = halts.reduce((a, h) => (h.k <= k + .005 ? h : a), halts[0]);
     readout.innerHTML = `<b>${k >= 1 ? (si >= 0 && t >= SCRIPT[si].t0 ? "6 April" : "5 April") : fmtDate(day)} 1930</b>${k >= 1 ? "Dandi" : near.name} · ${Math.round(k * routeKm)} km · day ${Math.min(25, 1 + Math.floor(day + (t >= SCRIPT[si].t0 ? 1 : 0)))}`;
   }
