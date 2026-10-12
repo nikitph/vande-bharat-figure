@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Samudra Manthan Paper Theatre</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,500&family=Yatra+One&display=swap">
+<style>
+/* Layout: a toy paper theatre fills the screen; layers of cut card move in depth behind a fixed proscenium. Single look by choice. */
+:root{--night:#141b33;--cream:#f4e6c6;--saffron:#e98a2c;--ink:#2a1a12;--serif:"Cormorant Garamond",Georgia,serif;--deva:"Yatra One",Georgia,serif;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:#120d0b;color:var(--cream);font-family:var(--serif);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:7%;transform:translateX(-50%);width:min(860px,84%);text-align:center;font-style:italic;font-weight:500;font-size:clamp(16px,2.2vw,26px);line-height:1.3;color:var(--cream);text-shadow:0 1px 8px #000,0 0 2px #000;transition:opacity .5s;pointer-events:none}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:#120d0b;font:15px var(--serif)}
+.bar button{font:15px var(--serif);color:var(--cream);background:transparent;border:1px solid #5a3d2b;border-radius:2px;padding:3px 10px;cursor:pointer}
+.bar button:hover{border-color:var(--cream)}
+.bar button:focus-visible{outline:2px solid var(--saffron);outline-offset:2px}
+.bar button[aria-pressed="true"]{background:var(--cream);color:#120d0b}
+.bar .note{opacity:.65;margin-left:auto;font-style:italic}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas><div id="sub"></div></div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">The churning of the ocean, after the Bhagavata and Vishnu Puranas.</span></div>
+<script>
+(() => {
+  /* ---------- narration, and what each line asks of the stage ---------- */
+  const SCRIPT = [
+    { text: "Long ago the gods lost their strength, and the asuras, their rivals, grew powerful across the three worlds.", s: { cam: [0, -60, 1.0], night: 1, groups: 1, arch: 1 } },
+    { text: "Vishnu told the gods to churn the ocean of milk for amrita, the nectar of immortality, and to ask the asuras to help.", s: { cam: [0, -10, 1.15], night: .7, groups: 1, arch: 1 } },
+    { text: "Mount Mandara was uprooted to be the churning rod, and Vasuki, king of serpents, became the rope.", s: { cam: [0, -120, 1.45], night: .55, mountain: 1, serpent: 1, groups: 1, arch: .3 } },
+    { text: "The asuras took the serpent's head and the gods its tail, and they pulled, back and forth.", s: { cam: [0, -40, 1.2], night: .5, mountain: 1, serpent: 1, churn: 1, groups: 1, arch: 0 } },
+    { text: "The mountain began to sink into the sea, so Vishnu became Kurma, a great tortoise, and carried it on his back.", s: { cam: [0, 110, 1.75], night: .55, mountain: 1, serpent: 1, churn: .6, tortoise: 1, groups: 1, arch: 0 } },
+    { text: "First the ocean gave up halahala, a poison that could burn the worlds. Shiva drank it, and his throat turned blue.", s: { cam: [-300, -250, 1.35], night: .9, mountain: 1, serpent: 1, churn: .3, tortoise: 1, poison: 1, shiva: 1, groups: 1, arch: 0 } },
+    { text: "Then came treasures: the moon, Kamadhenu the wish-granting cow, and Lakshmi on a lotus.", s: { cam: [0, -60, 1.1], night: .35, mountain: 1, serpent: 1, churn: .6, tortoise: 1, shiva: 1, treasure: 1, groups: 1, arch: 0 } },
+    { text: "Last of all rose Dhanvantari, physician of the gods, holding the pot of amrita.", s: { cam: [0, 40, 1.5], night: .25, mountain: 1, serpent: 1, churn: .15, tortoise: 1, shiva: 1, treasure: 1, amrita: 1, groups: 1, arch: 0 } },
+    { text: "And so the gods won back their strength.", s: { cam: [0, -40, 1.0], night: .3, mountain: 1, serpent: 1, churn: 0, tortoise: 1, shiva: 1, treasure: 1, amrita: 1, groups: 1, arch: 1 } }
+  ];
+  const KEYS = ["night", "mountain", "serpent", "churn", "tortoise", "poison", "shiva", "treasure", "amrita", "groups", "arch"];
+  const WPS = 2.5;
+  let acc = 0;
+  for (const l of SCRIPT) { l.dur = l.text.split(/\s+/).length / WPS + 1.6; l.t0 = acc; acc += l.dur; for (const k of KEYS) l.s[k] ??= 0; }
+  const TOTAL = acc + 1.5;
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+  function stateAt(t) {
+    const i = lineAt(t), L = SCRIPT[i], P = i ? SCRIPT[i - 1].s : { ...SCRIPT[0].s, cam: [0, -20, .92] }, k = ease((t - L.t0) / (L.dur * .65)), o = {};
+    for (const key of KEYS) o[key] = lerp(P[key], L.s[key], k);
+    o.cx = lerp(P.cam[0], L.s.cam[0], k); o.cy = lerp(P.cam[1], L.s.cam[1], k); o.zoom = Math.exp(lerp(Math.log(P.cam[2]), Math.log(L.s.cam[2]), k));
+    o.line = i; o.lk = (t - L.t0) / L.dur;
+    return o;
+  }
+
+  /* ---------- palette: a miniature painter's colours, cut from card ---------- */
+  const C = {
+    sky0: "#101631", sky1: "#2b2f5c", skyDay0: "#3a5c86", skyDay1: "#e9b98a", star: "#f6e7b9",
+    sea: ["#0f4a57", "#13606b", "#197a7f", "#2a9790", "#cfe6d8"], foam: "#f1f3e6",
+    mount: "#6b4f3a", mountLit: "#8d6a4b", mountDark: "#4a3426", tree: "#3f5b33", treeLit: "#5e7c43",
+    snake: "#2f7a4a", snakeLit: "#58a462", snakeDark: "#1e5233", belly: "#e8d79a",
+    godSkin: "#3d67b3", godDhoti: "#efb43a", godCrown: "#f3cf55", asuraSkin: "#7d2f2a", asuraDhoti: "#3c4a2a", horn: "#efe1c3",
+    shell: "#3e6e5c", shellLit: "#6a9a72", shellLine: "#22443a", poison: "#3a2350", shivaSkin: "#9fb6c9", throat: "#2f63c4",
+    moon: "#f6efd4", cow: "#f2ead8", lotus: "#e88aa0", lotusLit: "#f6b9c4", gold: "#f0c246", glow: "#ffd98a",
+    rockL: "#4b3b4e", rockR: "#4f3a33", arch: "#7a1f22", archLit: "#a9332f", archGold: "#d9a640", curtain: "#5a1418"
+  };
+
+  /* ---------- canvas, paper grain ---------- */
+  const cv = document.getElementById("c"), g = cv.getContext("2d"), stage = document.getElementById("stage");
+  let W = 1, H = 1, DPR = 1;
+  function resize() { DPR = Math.min(2, devicePixelRatio || 1); W = stage.clientWidth; H = stage.clientHeight; cv.width = W * DPR; cv.height = H * DPR; }
+  addEventListener("resize", resize); resize();
+  const grain = document.createElement("canvas"); grain.width = grain.height = 256;
+  { const q = grain.getContext("2d"), d = q.createImageData(256, 256); for (let i = 0; i < d.data.length; i += 4) { const v = 200 + Math.random() * 55; d.data[i] = v; d.data[i + 1] = v * .97; d.data[i + 2] = v * .9; d.data[i + 3] = 255; } q.putImageData(d, 0, 0); }
+  let grainPat = null;
+  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // card edges are cut by hand: every outline gets a little wobble, fixed per shape
+  const cut = (pts, amt = 2.2, s = 1) => { let q = s * 997; const r = () => (q = (q * 16807) % 2147483647) / 2147483647; return pts.map(([x, y]) => [x + (r() - .5) * amt, y + (r() - .5) * amt]); };
+  const poly = pts => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); };
+  // fill a piece of card: it casts a soft shadow on the layer behind, and its cut edge catches light on top
+  function card(path, fill, depth = 1, edge = "rgba(255,240,210,.35)") {
+    g.save();
+    g.shadowColor = "rgba(8,4,12,.45)"; g.shadowBlur = 10 * depth * view.s * DPR; g.shadowOffsetX = 3 * depth * view.s * DPR; g.shadowOffsetY = 5 * depth * view.s * DPR;
+    path(); g.fillStyle = fill; g.fill();
+    g.restore();
+    if (edge) { g.save(); path(); g.clip(); g.translate(0, 1.6); path(); g.strokeStyle = edge; g.lineWidth = 1.6; g.stroke(); g.restore(); }
+  }
+  const view = { s: 1 };
+  // each layer has a parallax factor: far layers move and grow less as the camera moves
+  function layer(p, S, fn) {
+    const z = 1 + (S.zoom - 1) * p, s = Math.min(W / 1600, H / 900) * 1.02 * z * DPR;
+    view.s = s / DPR;
+    g.setTransform(s, 0, 0, s, W * DPR / 2 - S.cx * p * s, H * DPR / 2 - S.cy * p * s);
+    fn();
+  }
+
+  /* ---------- the pieces ---------- */
+  const STARS = [...Array(160)].map(() => [rnd() * 3400 - 1700, -rnd() * 900 - 80, .6 + rnd() * 1.8, rnd() * 6]);
+  function sky(S, t) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const grd = g.createLinearGradient(0, 0, 0, H * DPR), n = S.night;
+    grd.addColorStop(0, mix(C.skyDay0, C.sky0, n)); grd.addColorStop(.75, mix(C.skyDay1, C.sky1, n));
+    g.fillStyle = grd; g.fillRect(0, 0, W * DPR, H * DPR);
+    layer(.08, S, () => {
+      g.fillStyle = C.star;
+      for (const [x, y, r, ph] of STARS) { g.globalAlpha = n * (.5 + .5 * Math.sin(t * 1.3 + ph)); star(x, y, r); }
+      g.globalAlpha = 1;
+    });
+  }
+  function star(x, y, r) { g.beginPath(); for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, q = i % 2 ? r * .35 : r * 1.6; g.lineTo(x + Math.cos(a) * q, y + Math.sin(a) * q); } g.closePath(); g.fill(); }
+  const CLOUDS = [...Array(7)].map((_, i) => ({ x: -1500 + i * 520 + rnd() * 200, y: -420 + rnd() * 160, w: 220 + rnd() * 160, s: i }));
+  function clouds(S, t) {
+    layer(.22, S, () => {
+      for (const c of CLOUDS) {
+        const x = ((c.x + t * 6 + 1800) % 3600) - 1800;
+        card(() => { g.beginPath(); for (let k = 0; k < 5; k++) { const cx = x + (k - 2) * c.w * .22, r = c.w * (.16 + .08 * Math.sin(k * 2.1 + c.s)); g.moveTo(cx + r, c.y); g.arc(cx, c.y - r * .3, r, 0, Math.PI * 2); } }, mix("#e8d6c0", "#3d4170", S.night), .5, null);
+      }
+    });
+  }
+  // the ocean of milk: rows of scalloped waves, each a separate strip of card, bobbing out of step
+  function waveRow(y, amp, len, ph, colour, depth, t, foam = true) {
+    const pts = [], x0 = -2000, x1 = 2000;
+    for (let x = x0; x <= x1; x += len / 8) {
+      const k = ((x - x0) / len + ph) % 1, crest = Math.pow(Math.sin(k * Math.PI), .6);
+      pts.push([x, y - crest * amp + Math.sin(t * 1.4 + x * .004 + ph * 6) * amp * .25]);
+    }
+    const path = () => { g.beginPath(); g.moveTo(x0, 900); pts.forEach(([x, yy]) => g.lineTo(x, yy)); g.lineTo(x1, 900); g.closePath(); };
+    card(path, colour, depth, null);
+    if (foam) { g.beginPath(); pts.forEach(([x, yy], i) => i ? g.lineTo(x, yy) : g.moveTo(x, yy)); g.strokeStyle = C.foam; g.globalAlpha = .65; g.lineWidth = 3; g.stroke(); g.globalAlpha = 1;
+      // curls on the crests, the way a printer would cut them
+      g.fillStyle = C.foam; for (let i = 0; i < pts.length; i += 8) { const [x, yy] = pts[i + 4] || pts[i]; g.beginPath(); g.arc(x, yy + 4, amp * .18, Math.PI * .1, Math.PI * 1.25); g.lineWidth = 2.4; g.strokeStyle = C.foam; g.stroke(); } }
+  }
+  // Mount Mandara: a stepped mountain whose stripes and trees slide sideways as it turns
+  const MOUNT = cut([[-250, 200], [-215, 90], [-225, 10], [-180, -90], [-170, -180], [-120, -270], [-80, -340], [-30, -400], [0, -425], [40, -395], [92, -330], [138, -240], [150, -150], [196, -60], [214, 60], [250, 200]], 7, 3);
+  const TREES = [...Array(40)].map(() => [rnd(), -400 + rnd() * 560, 9 + rnd() * 10]);
+  function halfWidthAt(y) { // the mountain's half-width at a height, from its outline
+    let best = 40; for (let i = 0; i < MOUNT.length - 1; i++) { const [x0, y0] = MOUNT[i], [x1, y1] = MOUNT[i + 1]; if ((y >= Math.min(y0, y1)) && (y <= Math.max(y0, y1)) && y0 !== y1) best = Math.max(best, Math.abs(x0 + (x1 - x0) * (y - y0) / (y1 - y0))); } return best; }
+  function mountain(S, t, rise, ang) {
+    const dy = (1 - rise) * 700 + S.sink;
+    g.save(); g.translate(0, dy);
+    card(() => poly(MOUNT), C.mount, 1.2);
+    g.save(); poly(MOUNT); g.clip();
+    // light from the left: a lit flank and a dark flank, with terraces wrapping round
+    const lg = g.createLinearGradient(-160, 0, 160, 0); lg.addColorStop(0, C.mountLit); lg.addColorStop(.45, C.mount); lg.addColorStop(1, C.mountDark);
+    g.fillStyle = lg; g.fillRect(-200, -450, 400, 700);
+    g.strokeStyle = "rgba(40,25,15,.35)"; g.lineWidth = 3;
+    for (let y = -380; y < 200; y += 34) { const hw = halfWidthAt(y); g.beginPath(); g.ellipse(0, y, hw, 9, 0, 0, Math.PI); g.stroke(); }
+    for (const [u, y, r] of TREES) {
+      const hw = halfWidthAt(y), a = u * Math.PI * 2 + ang, x = Math.cos(a) * hw * .92, front = Math.sin(a);
+      if (front < 0) continue;
+      const sc = .5 + .5 * front;
+      g.fillStyle = C.tree; g.fillRect(x - 1.5, y - r * sc, 3, r * sc);
+      g.fillStyle = x < 0 ? C.treeLit : C.tree; g.beginPath(); g.arc(x, y - r * sc * 1.2, r * .75 * sc, 0, Math.PI * 2); g.fill();
+    }
+    g.restore(); g.restore();
+    return dy;
+  }
+  // Vasuki: three coils round the mountain, then out to the gods (tail) and the asuras (head)
+  const COILS = [-250, -150, -50];
+  function coil(y, front, dy, pull, a) {
+    const hw = halfWidthAt(y) + 14, yy = y + dy;
+    g.beginPath();
+    if (front) g.ellipse(0, yy, hw, 26, -.12, 0, Math.PI); else g.ellipse(0, yy, hw, 26, -.12, Math.PI, Math.PI * 2);
+    g.lineWidth = 24; g.lineCap = "round"; g.strokeStyle = front ? C.snake : C.snakeDark; g.globalAlpha = a; g.stroke();
+    if (front) { g.lineWidth = 7; g.strokeStyle = C.snakeLit; g.setLineDash([10, 14]); g.lineDashOffset = -pull * 6; g.stroke(); g.setLineDash([]); }
+    g.globalAlpha = 1;
+  }
+  function rope(dy, pull, a, side) { // a band from the lowest coil out to one bank
+    const y0 = COILS[2] + dy, sx = side * (halfWidthAt(COILS[2]) + 10), ex = side * 610 + pull * 40;
+    g.beginPath(); g.moveTo(sx, y0); g.bezierCurveTo(sx + side * 160, y0 + 40, ex - side * 180, y0 + 20, ex, y0 - 10);
+    g.lineWidth = side < 0 ? 18 : 24; g.strokeStyle = C.snake; g.globalAlpha = a; g.lineCap = "round"; g.stroke();
+    g.lineWidth = 6; g.strokeStyle = C.snakeLit; g.setLineDash([10, 14]); g.lineDashOffset = -pull * 6; g.stroke(); g.setLineDash([]);
+    g.globalAlpha = 1;
+    return [ex, y0 - 10];
+  }
+  function hood(x, y, a) { // the serpent's head held by the asuras: a cobra's spread hood
+    g.globalAlpha = a;
+    card(() => { g.beginPath(); g.moveTo(x - 10, y + 12); g.bezierCurveTo(x + 10, y - 80, x + 90, y - 80, x + 100, y - 10); g.bezierCurveTo(x + 80, y + 10, x + 30, y + 14, x - 10, y + 12); g.closePath(); }, C.snake, 1.4);
+    g.fillStyle = C.belly; g.beginPath(); g.ellipse(x + 50, y - 26, 20, 26, -.3, 0, Math.PI * 2); g.fill();
+    g.fillStyle = C.snakeDark; g.beginPath(); g.ellipse(x + 50, y - 26, 8, 11, -.3, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#f6e4a0"; g.beginPath(); g.arc(x + 92, y - 22, 4, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+  }
+  // gods and asuras: cut-paper figures, leaning back on the rope in turn
+  function figure(x, y, kind, lean, s = 1) {
+    const god = kind === "god", dir = god ? -1 : 1, skin = god ? C.godSkin : C.asuraSkin, cloth = god ? C.godDhoti : C.asuraDhoti;
+    g.save(); g.translate(x, y); g.scale(s * dir, s); g.rotate(-lean * .35);
+    const part = (fn, fill, d = .8) => card(() => { g.beginPath(); fn(); g.closePath(); }, fill, d, "rgba(255,240,210,.25)");
+    part(() => { g.moveTo(-14, 0); g.lineTo(-24, -58); g.lineTo(-8, -60); g.lineTo(0, 0); }, skin);              // back leg
+    part(() => { g.moveTo(4, 0); g.lineTo(-4, -60); g.lineTo(12, -62); g.lineTo(18, 0); }, skin);               // front leg
+    part(() => { g.moveTo(-26, -50); g.lineTo(-20, -86); g.lineTo(16, -88); g.lineTo(22, -48); g.lineTo(-2, -40); }, cloth); // dhoti
+    part(() => { g.moveTo(-16, -84); g.lineTo(-12, -140); g.lineTo(14, -142); g.lineTo(16, -86); }, skin);      // torso
+    part(() => { g.moveTo(10, -132); g.lineTo(60, -112); g.lineTo(60, -100); g.lineTo(8, -116); }, skin);       // arms to the rope
+    part(() => { g.arc(0, -158, 16, 0, Math.PI * 2); }, skin);                                                    // head
+    if (god) part(() => { g.moveTo(-15, -168); g.lineTo(-10, -196); g.lineTo(-4, -180); g.lineTo(0, -204); g.lineTo(4, -180); g.lineTo(10, -196); g.lineTo(15, -168); }, C.godCrown);
+    else { part(() => { g.moveTo(-12, -168); g.quadraticCurveTo(-30, -186, -22, -204); g.quadraticCurveTo(-18, -186, -4, -172); }, C.horn); part(() => { g.moveTo(12, -168); g.quadraticCurveTo(30, -186, 22, -204); g.quadraticCurveTo(18, -186, 4, -172); }, C.horn); }
+    g.fillStyle = god ? C.godCrown : "#e9c46a"; g.beginPath(); g.arc(6, -160, 2.2, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+  const ROCK_L = cut([[-1500, 520], [-1500, 130], [-1180, 90], [-1000, 60], [-840, 80], [-700, 120], [-600, 170], [-560, 520]], 10, 5);
+  const ROCK_R = cut([[1500, 520], [1500, 120], [1200, 80], [1000, 64], [840, 90], [700, 130], [600, 176], [560, 520]], 10, 6);
+  const PEAK = cut([[-760, 120], [-700, -60], [-620, -150], [-560, -210], [-470, -240], [-380, -200], [-330, -120], [-300, 120]], 9, 7);
+  function banks(S, t, ropeL, ropeR) {
+    const a = S.groups, ph = Math.sin(t * 1.7) * S.churn;
+    card(() => poly(ROCK_L), C.rockL, 1.5); card(() => poly(ROCK_R), C.rockR, 1.5);
+    if (a < .02) return;
+    g.globalAlpha = a;
+    for (let i = 0; i < 5; i++) figure(-640 - i * 120, 120 - i * 10 + (i % 2) * 6, "god", Math.max(0, ph) + .15, .9 - i * .04);
+    for (let i = 0; i < 5; i++) figure(640 + i * 120, 120 - i * 12 + (i % 2) * 6, "asura", Math.max(0, -ph) + .15, .95 - i * .04);
+    g.globalAlpha = 1;
+  }
+  // Kurma, the tortoise, rising under the mountain
+  function tortoise(S, t, k) {
+    if (k < .01) return;
+    const y = 175 + (1 - k) * 360;
+    card(() => { g.beginPath(); g.ellipse(250, y + 10, 60, 34, -.2, 0, Math.PI * 2); }, C.shell, 1); // head
+    g.fillStyle = "#f3e7c4"; g.beginPath(); g.arc(282, y, 5, 0, Math.PI * 2); g.fill();
+    for (const s of [-1, 1]) card(() => { g.beginPath(); g.ellipse(s * 180, y + 50, 70, 22, s * .4, 0, Math.PI * 2); }, C.shell, 1);
+    card(() => { g.beginPath(); g.ellipse(0, y + 20, 230, 120, 0, Math.PI, 0); g.closePath(); }, C.shell, 1.3);
+    g.save(); g.beginPath(); g.ellipse(0, y + 20, 230, 120, 0, Math.PI, 0); g.closePath(); g.clip();
+    const lg = g.createLinearGradient(-230, 0, 230, 0); lg.addColorStop(0, C.shellLit); lg.addColorStop(1, C.shell); g.fillStyle = lg; g.fillRect(-240, y - 110, 480, 140);
+    g.strokeStyle = C.shellLine; g.lineWidth = 4;
+    for (let r = 0; r < 3; r++) for (let i = -4; i <= 4; i++) { const cx = i * 58 + (r % 2) * 29, cy = y - 10 - r * 40; g.beginPath(); for (let j = 0; j < 6; j++) { const a = j * Math.PI / 3; g.lineTo(cx + Math.cos(a) * 28, cy + Math.sin(a) * 20); } g.closePath(); g.stroke(); }
+    g.restore();
+  }
+  // halahala: dark smoke rising from the sea, drawn into Shiva's mouth
+  const PUFFS = [...Array(40)].map(() => ({ x: (rnd() - .5) * 360, ph: rnd(), r: 18 + rnd() * 24 }));
+  function poison(S, t, shivaXY) {
+    if (S.poison < .01) return;
+    for (const p of PUFFS) {
+      const k = (t * .12 + p.ph) % 1, drink = Math.max(0, S.shiva - .3);
+      const x = lerp(p.x, shivaXY[0], ease(k) * drink), y = lerp(120, shivaXY[1], ease(k) * drink) - k * 240 * (1 - drink);
+      const r = p.r * (1 - k * .45), al = S.poison * Math.sin(k * Math.PI);
+      g.globalAlpha = al;
+      card(() => { g.beginPath(); for (let j = 0; j < 4; j++) { const a = j * 1.7 + p.ph * 9; g.moveTo(x + Math.cos(a) * r * .5 + r * .7, y + Math.sin(a) * r * .4); g.arc(x + Math.cos(a) * r * .5, y + Math.sin(a) * r * .4, r * .7, 0, Math.PI * 2); } }, mix(C.poison, "#120a1c", k), .6, null);
+      g.strokeStyle = "rgba(170,140,220,.35)"; g.lineWidth = 2; g.beginPath(); g.arc(x - r * .2, y - r * .25, r * .6, Math.PI * 1.05, Math.PI * 1.6); g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+  function shiva(S, t) {
+    const a = S.shiva; if (a < .01) return [-470, -330];
+    const x = -470, y = -240;
+    g.globalAlpha = a;
+    // halo
+    const hg = g.createRadialGradient(x, y - 110, 10, x, y - 110, 120); hg.addColorStop(0, "rgba(255,226,160,.55)"); hg.addColorStop(1, "rgba(255,226,160,0)"); g.fillStyle = hg; g.fillRect(x - 130, y - 240, 260, 260);
+    card(() => { g.beginPath(); g.ellipse(x, y - 30, 56, 34, 0, Math.PI, 0); g.lineTo(x + 60, y); g.lineTo(x - 60, y); g.closePath(); }, "#e7d9b8", 1); // seated legs on tiger skin
+    card(() => { g.beginPath(); g.moveTo(x - 30, y - 40); g.lineTo(x - 24, y - 120); g.lineTo(x + 24, y - 120); g.lineTo(x + 30, y - 40); g.closePath(); }, C.shivaSkin, 1);
+    card(() => { g.beginPath(); g.arc(x, y - 146, 22, 0, Math.PI * 2); }, C.shivaSkin, 1);
+    card(() => { g.beginPath(); g.moveTo(x - 20, y - 160); g.quadraticCurveTo(x, y - 230, x + 20, y - 160); g.closePath(); }, "#3b2a24", 1); // matted hair
+    g.strokeStyle = "#f6efd4"; g.lineWidth = 4; g.beginPath(); g.arc(x + 12, y - 196, 10, -.6, 2.2); g.stroke(); // crescent moon in the hair
+    g.fillStyle = C.throat; g.globalAlpha = a * Math.min(1, Math.max(0, (S.shiva - .55) * 3)); g.beginPath(); g.ellipse(x, y - 122, 12, 6, 0, 0, Math.PI * 2); g.fill(); g.globalAlpha = a;
+    g.strokeStyle = "#cdbb8c"; g.lineWidth = 4; g.beginPath(); g.moveTo(x + 52, y + 10); g.lineTo(x + 52, y - 210); g.stroke(); // trident
+    g.beginPath(); g.moveTo(x + 38, y - 196); g.quadraticCurveTo(x + 40, y - 214, x + 52, y - 226); g.quadraticCurveTo(x + 64, y - 214, x + 66, y - 196); g.moveTo(x + 52, y - 226); g.lineTo(x + 52, y - 236); g.stroke();
+    g.globalAlpha = 1;
+    return [x, y - 140];
+  }
+  // treasures rising: the moon into the sky, the cow and Lakshmi from the waves
+  function treasures(S, t) {
+    const k = S.treasure; if (k < .01) return;
+    const rise = (d) => ease((k - d) / (1 - d));
+    const m = rise(0); g.globalAlpha = m;
+    { const x = 420, y = -330 - m * 80; card(() => { g.beginPath(); g.arc(x, y, 44, 0, Math.PI * 2); g.arc(x + 18, y - 10, 38, 0, Math.PI * 2, true); }, C.moon, .6, null); }
+    const c = rise(.15); g.globalAlpha = c;
+    { const x = -330, y = 230 - c * 150; card(() => { g.beginPath(); g.ellipse(x, y, 62, 30, 0, 0, Math.PI * 2); g.moveTo(x + 56, y - 10); g.ellipse(x + 74, y - 26, 20, 15, -.4, 0, Math.PI * 2); for (const lx of [-40, -20, 24, 44]) g.rect(x + lx - 5, y + 18, 10, 34); }, C.cow, 1);
+      g.strokeStyle = C.gold; g.lineWidth = 4; g.beginPath(); g.moveTo(x + 76, y - 40); g.quadraticCurveTo(x + 70, y - 58, x + 84, y - 64); g.stroke(); }
+    const l = rise(.3); g.globalAlpha = l;
+    { const x = 330, y = 250 - l * 150;
+      for (let i = 0; i < 7; i++) { const a = -Math.PI + (i + .5) * Math.PI / 7; card(() => { g.beginPath(); g.ellipse(x + Math.cos(a) * 42, y + Math.sin(a) * 20, 30, 12, a, 0, Math.PI * 2); }, i % 2 ? C.lotus : C.lotusLit, .7, null); }
+      card(() => { g.beginPath(); g.moveTo(x - 24, y - 10); g.lineTo(x - 16, y - 80); g.lineTo(x + 16, y - 80); g.lineTo(x + 24, y - 10); g.closePath(); }, "#d8394a", .8);
+      card(() => { g.beginPath(); g.arc(x, y - 98, 16, 0, Math.PI * 2); }, "#e2b28b", .8);
+      card(() => { g.beginPath(); g.moveTo(x - 14, y - 110); g.lineTo(x - 8, y - 132); g.lineTo(x, y - 118); g.lineTo(x + 8, y - 132); g.lineTo(x + 14, y - 110); g.closePath(); }, C.gold, .8); }
+    g.globalAlpha = 1;
+  }
+  function amrita(S, t) {
+    const k = S.amrita; if (k < .01) return;
+    const x = 0, y = 330 - ease(k) * 230;
+    g.save(); g.globalAlpha = k;
+    g.translate(x, y - 150);
+    for (let i = 0; i < 18; i++) { g.rotate(Math.PI * 2 / 18); g.fillStyle = `rgba(255,217,138,${.18 + .1 * Math.sin(t * 2 + i)})`; g.beginPath(); g.moveTo(0, 0); g.lineTo(-14, 340); g.lineTo(14, 340); g.closePath(); g.fill(); }
+    g.restore(); g.globalAlpha = k;
+    g.strokeStyle = C.godSkin; g.lineWidth = 10; g.lineCap = "round"; g.beginPath(); g.moveTo(x - 20, y - 86); g.quadraticCurveTo(x - 46, y - 140, x - 26, y - 186); g.moveTo(x + 20, y - 86); g.quadraticCurveTo(x + 46, y - 140, x + 26, y - 186); g.stroke();
+    card(() => { g.beginPath(); g.moveTo(x - 30, y); g.lineTo(x - 22, y - 92); g.lineTo(x + 22, y - 92); g.lineTo(x + 30, y); g.closePath(); }, "#e5e0d0", 1);
+    card(() => { g.beginPath(); g.moveTo(x - 22, y - 92); g.lineTo(x - 18, y - 96); g.lineTo(x + 18, y - 96); g.lineTo(x + 22, y - 92); g.closePath(); }, C.gold, 1);
+    card(() => { g.beginPath(); g.arc(x, y - 112, 18, 0, Math.PI * 2); }, C.godSkin, 1);
+    card(() => { g.beginPath(); g.moveTo(x - 16, y - 122); g.lineTo(x - 10, y - 146); g.lineTo(x, y - 132); g.lineTo(x + 10, y - 146); g.lineTo(x + 16, y - 122); g.closePath(); }, C.godCrown, 1);
+    // the pot, held up in both hands
+    card(() => { g.beginPath(); g.ellipse(x, y - 206, 32, 27, 0, 0, Math.PI * 2); g.rect(x - 12, y - 246, 24, 18); g.ellipse(x, y - 247, 20, 5, 0, 0, Math.PI * 2); }, C.gold, 1.2);
+    g.strokeStyle = "#b98a2a"; g.lineWidth = 2.5; g.beginPath(); g.ellipse(x, y - 206, 32, 8, 0, 0, Math.PI); g.stroke();
+    g.fillStyle = "#fff4cf"; g.globalAlpha = k * (.6 + .4 * Math.sin(t * 3)); g.beginPath(); g.arc(x, y - 256, 11, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+  }
+  // the proscenium: a painted arch, curtains and footlights, fixed to the screen
+  function proscenium(S, t) {
+    const a = S.arch; if (a < .01) return;
+    g.setTransform(DPR, 0, 0, DPR, 0, 0); g.globalAlpha = a;
+    const m = Math.min(W, H) * .07, top = H * .12;
+    const path = () => { g.beginPath(); g.rect(0, 0, W, H); g.moveTo(m, H); g.lineTo(m, top + m); g.quadraticCurveTo(W / 2, top - m * 1.4, W - m, top + m); g.lineTo(W - m, H); g.closePath(); };
+    g.save(); g.shadowColor = "rgba(0,0,0,.6)"; g.shadowBlur = 30; path(); g.fillStyle = C.arch; g.fill("evenodd"); g.restore();
+    g.strokeStyle = C.archGold; g.lineWidth = 3; g.beginPath(); g.moveTo(m + 6, H); g.lineTo(m + 6, top + m + 4); g.quadraticCurveTo(W / 2, top - m * 1.4 + 8, W - m - 6, top + m + 4); g.lineTo(W - m - 6, H); g.stroke();
+    // curtains gathered at the sides
+    for (const s of [0, 1]) { const x0 = s ? W - m : m, dir = s ? -1 : 1; g.fillStyle = C.curtain; g.beginPath(); g.moveTo(x0, top + m); g.quadraticCurveTo(x0 + dir * m * 1.6, H * .45, x0 + dir * m * .4, H * .8); g.lineTo(x0, H * .8); g.closePath(); g.fill(); g.strokeStyle = "rgba(255,200,150,.18)"; g.lineWidth = 1.5; for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(x0, top + m + i * 6); g.quadraticCurveTo(x0 + dir * m * (1.6 - i * .35), H * .45, x0 + dir * m * (.4 - i * .08), H * .8); g.stroke(); } }
+    // title cartouche at the top of the arch
+    g.fillStyle = C.archGold; g.font = `${Math.round(Math.min(W, H) * .045)}px "Yatra One", Georgia, serif`; g.textAlign = "center"; g.fillText("समुद्र मन्थन", W / 2, top * .72 + m * .2);
+    // footlights
+    const fg = g.createLinearGradient(0, H, 0, H * .78); fg.addColorStop(0, "rgba(255,190,90,.28)"); fg.addColorStop(1, "rgba(255,190,90,0)"); g.fillStyle = fg; g.fillRect(m, H * .78, W - 2 * m, H * .22);
+    g.globalAlpha = 1;
+  }
+  function mix(a, b, k) { const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)), x = p(a), y = p(b); return `rgb(${x.map((v, i) => Math.round(v + (y[i] - v) * k)).join(",")})`; }
+
+  /* ---------- one frame, back to front ---------- */
+  function frame(t) {
+    const S = stateAt(t);
+    S.sink = S.mountain > .5 && S.line >= 4 ? 0 : 0;
+    const ang = t * 1.2 * S.churn, pull = Math.sin(t * 1.7) * S.churn;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
+    sky(S, t); clouds(S, t);
+    layer(.45, S, () => { waveRow(110, 26, 180, .2, C.sea[0], .4, t); waveRow(140, 30, 210, .55, C.sea[1], .5, t); });
+    let shivaXY = [-470, -380];
+    layer(.7, S, () => { card(() => poly(PEAK), "#3d3150", 1.2); shivaXY = shiva(S, t); });
+    layer(1, S, () => {
+      const a = S.serpent;
+      const dy = (1 - S.mountain) * 700;
+      for (const y of COILS) coil(y, false, dy, pull, a);
+      if (S.mountain > .01) mountain(S, t, S.mountain, ang);
+      tortoise(S, t, S.tortoise);
+      for (const y of COILS) coil(y, true, dy, pull, a);
+      waveRow(190, 34, 240, .1, C.sea[2], .9, t);
+      poison(S, t, shivaXY);
+      treasures(S, t);
+      const L = rope(dy, -pull, a, -1), R = rope(dy, pull, a, 1);
+      hood(R[0] - 20, R[1] + 8, a);
+      banks(S, t, L, R);
+    });
+    layer(1.25, S, () => { amrita(S, t); waveRow(300, 40, 300, .35, C.sea[3], 1.4, t); });
+    layer(1.6, S, () => { waveRow(420, 46, 360, .7, C.sea[0], 1.8, t); });
+    // paper grain over everything, then the arch
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    if (!grainPat) grainPat = g.createPattern(grain, "repeat");
+    g.globalCompositeOperation = "multiply"; g.globalAlpha = .55; g.fillStyle = grainPat; g.fillRect(0, 0, cv.width, cv.height); g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+    const vg = g.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * .3, cv.width / 2, cv.height / 2, cv.height * .9); vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.45)"); g.fillStyle = vg; g.fillRect(0, 0, cv.width, cv.height);
+    proscenium(S, t);
+    return S;
+  }
+
+  /* ---------- clock and controls ---------- */
+  const sub = document.getElementById("sub"), playB = document.getElementById("play"), bar = document.getElementById("bar"), btns = [];
+  let clock = 0, playing = true, last = performance.now(), shown = -1;
+  function show(S, t) {
+    const li = t < TOTAL - 1 ? S.line : -1;
+    if (li !== shown) { shown = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = li >= 0 ? SCRIPT[li].text : ""; sub.style.opacity = 1; }, 220); btns.forEach((b, i) => b.setAttribute("aria-pressed", i === li)); }
+  }
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((l, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = l.text; b.onclick = () => { clock = l.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); btns.push(b); });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; clock = SCRIPT[6].t0 + SCRIPT[6].dur * .8; }
+  function loop(now) { requestAnimationFrame(loop); const dt = Math.min(.05, (now - last) / 1000); last = now; if (playing) clock = (clock + dt) % TOTAL; show(frame(clock), clock); }
+  window.MANTHAN = { seek: t => { clock = t; show(frame(t), t); }, SCRIPT, TOTAL };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

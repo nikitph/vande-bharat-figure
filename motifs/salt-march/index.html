@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Salt March Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap">
+<style>
+/* Layout: one sheet of old paper fills the screen; the map is inked on it and the camera moves over it. Single look by choice. */
+:root{--paper:#efe3c8;--paper2:#e6d6b4;--ink:#3a2a1a;--inkSoft:#6b5640;--sea:#e3dcc4;--route:#a8321d;--fell:"IM Fell English",Georgia,serif;--fellsc:"IM Fell English SC",Georgia,serif;color-scheme:light}
+html,body{height:100%;margin:0}
+body{background:#2b2219;color:var(--ink);font-family:var(--fell);display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:300px;overflow:hidden;background:var(--paper)}
+svg#map{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:5.5%;transform:translateX(-50%);width:min(860px,88%);text-align:center;font-style:italic;font-size:clamp(15px,2.1vw,24px);line-height:1.35;color:var(--ink);text-shadow:0 0 6px var(--paper),0 0 2px var(--paper);transition:opacity .5s;pointer-events:none}
+#readout{position:absolute;right:3%;top:4%;font-family:var(--fellsc);font-size:clamp(12px,1.4vw,17px);letter-spacing:.06em;text-align:right;color:var(--ink);pointer-events:none;font-variant-numeric:tabular-nums}
+#readout b{display:block;font-family:var(--fell);font-size:clamp(18px,2.4vw,30px);font-weight:400;letter-spacing:0}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-inline:16px;padding-block:8px 10px;background:#2b2219;color:#e9dcc0;font:13px var(--fell)}
+.bar button{font:14px var(--fell);color:#e9dcc0;background:transparent;border:1px solid #6b5640;border-radius:2px;padding:4px 10px;cursor:pointer}
+.bar button:hover{border-color:#e9dcc0}
+.bar button:focus-visible{outline:2px solid #e3a24a;outline-offset:2px}
+.bar button[aria-pressed="true"]{background:#e9dcc0;color:#2b2219}
+.bar .note{opacity:.7;margin-left:auto}
+@media (prefers-reduced-motion:reduce){#sub{transition:none}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="map" viewBox="0 0 371 400" preserveAspectRatio="xMidYMid slice" aria-label="Map of the Salt March from Ahmedabad to Dandi, 1930"></svg>
+  <div id="readout"></div>
+  <div id="sub"></div>
+</div>
+<div class="bar" id="bar"><button id="play" type="button">Pause</button><span class="note">Map drawn from approximate coordinates; dates between halts are interpolated.</span></div>
+<script>
+(() => {
+  /* ---------- narration drives the clock ---------- */
+  const SCRIPT = [
+    { text: "On 12 March 1930, Mohandas Gandhi walked out of the Sabarmati Ashram in Ahmedabad, with seventy-eight followers.", cam: [ [23.0, 72.62, 70] ], route: [0, 0.02] },
+    { text: "The British taxed salt and forbade Indians to make their own. Gandhi chose the tax because everyone, rich or poor, paid it.", cam: [ [22.3, 72.4, 330] ], route: [0.02, 0.04] },
+    { text: "The march went south through the villages of Kheda, halting each evening for prayer and a speech.", cam: [ [22.75, 72.75, 110] ], route: [0.04, 0.28] },
+    { text: "The crowds grew at every halt, and village headmen resigned their posts as the march went by.", cam: [ [22.4, 72.85, 120] ], route: [0.28, 0.45] },
+    { text: "They crossed the Mahi, then the Narmada and the Tapti, at about ten miles a day.", cam: [ [21.6, 72.85, 190] ], route: [0.45, 0.86] },
+    { text: "On 5 April, after twenty-four days and about 385 kilometres, they reached the sea at Dandi.", cam: [ [20.95, 72.84, 85] ], route: [0.86, 1] },
+    { text: "Early the next morning Gandhi picked up a lump of salty mud from the shore, and broke the law.", cam: [ [20.9, 72.8, 34] ], route: [1, 1], salt: true },
+    { text: "Within weeks salt was being made illegally all along the coast, and tens of thousands were arrested.", cam: [ [21.9, 72.2, 360] ], route: [1, 1], spread: true }
+  ];
+  const WPS = 2.55;  // speaking pace, words per second
+  let t0 = 0;
+  for (const s of SCRIPT) { s.dur = s.text.split(/\s+/).length / WPS + 1.4; s.t0 = t0; t0 += s.dur; }
+  const TOTAL = t0 + 2;
+
+  /* ---------- the projection: degrees to sheet units ---------- */
+  const LON0 = 70.5, LAT0 = 24, KX = 100 * Math.cos(22 * Math.PI / 180), KY = 100;
+  const P = (lat, lon) => [(lon - LON0) * KX, (LAT0 - lat) * KY];
+  const pathOf = (pts, close) => pts.map((q, i) => (i ? "L" : "M") + P(q[0], q[1]).map(v => v.toFixed(2)).join(",")).join("") + (close ? "Z" : "");
+  const smooth = (pts, close) => {   // Catmull-Rom through projected points, so coasts and rivers flow
+    const p = pts.map(q => P(q[0], q[1])), n = p.length;
+    let d = `M${p[0][0].toFixed(2)},${p[0][1].toFixed(2)}`;
+    for (let i = 0; i < (close ? n : n - 1); i++) {
+      const a = p[(i - 1 + n) % n], b = p[i], c = p[(i + 1) % n], e = p[(i + 2) % n];
+      const A = close || i > 0 ? a : b, E = close || i < n - 2 ? e : c;
+      d += `C${(b[0] + (c[0] - A[0]) / 6).toFixed(2)},${(b[1] + (c[1] - A[1]) / 6).toFixed(2)} ${(c[0] - (E[0] - b[0]) / 6).toFixed(2)},${(c[1] - (E[1] - b[1]) / 6).toFixed(2)} ${c[0].toFixed(2)},${c[1].toFixed(2)}`;
+    }
+    return d + (close ? "Z" : "");
+  };
+
+  /* ---------- geography (approximate) ---------- */
+  const COAST = [[20.0, 72.72], [20.2, 72.78], [20.39, 72.83], [20.6, 72.87], [20.78, 72.82], [20.89, 72.79], [20.97, 72.74], [21.08, 72.66], [21.2, 72.62], [21.42, 72.6], [21.6, 72.61], [21.72, 72.55], [21.88, 72.53], [22.02, 72.6], [22.15, 72.63], [22.26, 72.58], [22.31, 72.5], [22.29, 72.4], [22.17, 72.26], [21.97, 72.2], [21.77, 72.17], [21.65, 72.28], [21.47, 72.22], [21.35, 72.14], [21.2, 72.0], [21.1, 71.8], [20.96, 71.56], [20.8, 71.25], [20.72, 71.0], [20.76, 70.8], [20.86, 70.5]];
+  const SEA = COAST.concat([[20.0, 70.5]]);
+  const RIVERS = [
+    [[23.95, 72.85], [23.6, 72.9], [23.3, 72.7], [23.06, 72.585], [22.8, 72.5], [22.55, 72.45], [22.3, 72.39]],
+    [[23.0, 73.75], [22.75, 73.35], [22.5, 73.1], [22.3, 72.85], [22.15, 72.63]],
+    [[21.95, 74.5], [21.85, 73.9], [21.8, 73.5], [21.72, 73.15], [21.7, 72.98], [21.62, 72.62]],
+    [[21.3, 74.5], [21.25, 73.9], [21.22, 73.3], [21.19, 72.86], [21.08, 72.67]],
+    [[20.95, 73.35], [20.96, 73.0], [20.97, 72.76]]
+  ];
+  const RIVER_NAMES = [["Sabarmati", 22.62, 72.43, -62], ["Mahi", 22.52, 73.12, 38], ["Narmada", 21.78, 73.45, 10], ["Tapti", 21.27, 73.55, 4]];
+  const ROUTE = [[23.06, 72.58], [22.98, 72.6], [22.92, 72.6], [22.85, 72.6], [22.79, 72.65], [22.71, 72.67], [22.69, 72.86], [22.56, 72.95], [22.41, 72.9], [22.27, 72.82], [22.15, 72.8], [22.05, 72.8], [21.99, 72.87], [21.83, 72.95], [21.7, 72.98], [21.63, 73.0], [21.48, 72.88], [21.33, 72.76], [21.17, 72.83], [21.05, 72.87], [20.95, 72.92], [20.91, 72.84], [20.89, 72.8]];
+  const TOWNS = [ // name, lat, lon, on route?, label dx, dy, anchor
+    ["Sabarmati Ashram", 23.06, 72.58, 1, -3, -2.5, "end"], ["Aslali", 22.92, 72.6, 1, -2.5, 1.2, "end"], ["Nadiad", 22.69, 72.86, 1, 2.6, 1.2, "start"], ["Anand", 22.56, 72.95, 1, 2.6, 1.2, "start"],
+    ["Borsad", 22.41, 72.9, 1, 2.6, 1.2, "start"], ["Jambusar", 22.05, 72.8, 1, -2.6, 1.2, "end"], ["Bharuch", 21.7, 72.98, 1, 2.6, -1.4, "start"], ["Ankleshwar", 21.63, 73.0, 1, 2.6, 2.4, "start"],
+    ["Surat", 21.17, 72.83, 1, 2.6, 1.2, "start"], ["Navsari", 20.95, 72.92, 1, 2.6, 1.2, "start"], ["Dandi", 20.89, 72.8, 1, 2.2, 2.8, "start"],
+    ["Ahmedabad", 23.03, 72.63, 0, 2.4, 3.4, "start"], ["Vadodara", 22.31, 73.18, 0, 2.4, 1.2, "start"], ["Khambhat", 22.31, 72.62, 0, 2.2, -1.4, "start"], ["Bhavnagar", 21.77, 72.15, 0, -2.4, 1.2, "end"], ["Diu", 20.71, 70.99, 0, 0, 4, "middle"]
+  ];
+
+  /* ---------- drawing ---------- */
+  const NS = "http://www.w3.org/2000/svg", svg = document.getElementById("map");
+  const el = (tag, attrs = {}, parent = svg) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); parent.appendChild(e); return e; };
+  const defs = el("defs");
+  defs.innerHTML = `
+    <filter id="paperTex" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="4"/><feColorMatrix values="0 0 0 0 0.36  0 0 0 0 0.27  0 0 0 0 0.16  0 0 0 0.10 0"/></filter>
+    <filter id="stains" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="4" seed="9"/><feColorMatrix values="0 0 0 0 0.42  0 0 0 0 0.3  0 0 0 0 0.14  0 0 0 0.55 -0.18"/></filter>
+    <filter id="inkBleed"><feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2" seed="2" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="0.55"/></filter>
+    <radialGradient id="vignette" cx="50%" cy="50%" r="72%"><stop offset="60%" stop-color="#5a4128" stop-opacity="0"/><stop offset="100%" stop-color="#5a4128" stop-opacity=".38"/></radialGradient>
+    <clipPath id="seaClip"><path d="${pathOf(SEA, true)}"/></clipPath>
+    <clipPath id="landClip"><path d="${pathOf(COAST.concat([[20.86, 74.6], [24.2, 74.6], [24.2, 70.4], [20.86, 70.4]]), true)}"/></clipPath>`;
+  const W = 371, H = 400;
+  el("rect", { x: -200, y: -200, width: W + 400, height: H + 400, fill: "var(--paper)" });
+  // the sea, water-lined the old way: rings of ink following the coast, fading out to sea
+  el("path", { d: pathOf(SEA, true), fill: "var(--sea)" });
+  const wl = el("g", { "clip-path": "url(#seaClip)", "data-keep": 1 });
+  const coastD = smooth(COAST, false);
+  for (let i = 14; i >= 1; i--) {
+    const w = i * 2.1;
+    el("path", { d: coastD, fill: "none", stroke: "var(--ink)", "stroke-opacity": (0.34 * Math.pow(1 - i / 15, 1.4)).toFixed(3), "stroke-width": w.toFixed(2), "stroke-linejoin": "round" }, wl);
+    el("path", { d: coastD, fill: "none", stroke: "var(--sea)", "stroke-width": (w - .32).toFixed(2), "stroke-linejoin": "round" }, wl);
+  }
+  // land tint and fields of stipple
+  const land = el("g", { "clip-path": "url(#landClip)" });
+  el("rect", { x: -50, y: -50, width: W + 100, height: H + 100, fill: "var(--paper2)", "fill-opacity": .35 }, land);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  let dots = "";
+  for (let i = 0; i < 2600; i++) { const x = rnd() * W, y = rnd() * H; dots += `M${x.toFixed(1)},${y.toFixed(1)}h.01`; }
+  el("path", { d: dots, stroke: "var(--inkSoft)", "stroke-opacity": .28, "stroke-width": .55, "stroke-linecap": "round" }, land);
+  // Kathiawar hills, drawn as old hachured bumps
+  let hills = "";
+  for (let i = 0; i < 60; i++) {
+    const lat = 21.25 + rnd() * .55, lon = 70.75 + rnd() * .9, [x, y] = P(lat, lon), s = 2 + rnd() * 2.4;
+    hills += `M${(x - s).toFixed(1)},${y.toFixed(1)}Q${x.toFixed(1)},${(y - s * 1.1).toFixed(1)} ${(x + s).toFixed(1)},${y.toFixed(1)}`;
+  }
+  el("path", { d: hills, fill: "none", stroke: "var(--inkSoft)", "stroke-width": .4, "stroke-opacity": .75 }, land);
+  // coastline, inked twice for weight
+  el("path", { d: coastD, fill: "none", stroke: "var(--ink)", "stroke-width": .75, filter: "url(#inkBleed)" });
+  // rivers taper toward their sources
+  RIVERS.forEach(r => { for (const [w, o] of [[1.15, .9], [.55, .9]]) el("path", { d: smooth(r, false), fill: "none", stroke: "var(--ink)", "stroke-width": w, "stroke-opacity": o * (w > 1 ? .35 : 1), "stroke-linecap": "round" }); });
+  RIVER_NAMES.forEach(([n, lat, lon, a]) => { const [x, y] = P(lat, lon); const t = el("text", { x, y, transform: `rotate(${a} ${x} ${y})`, "font-family": "IM Fell English", "font-style": "italic", "font-size": 3.4, fill: "var(--inkSoft)", "text-anchor": "middle", "letter-spacing": .6 }); t.textContent = n; });
+  // sea and region names
+  const label = (txt, lat, lon, size, opts = {}) => { const [x, y] = P(lat, lon); const t = el("text", { x, y, "font-family": opts.sc ? "IM Fell English SC" : "IM Fell English", "font-style": opts.it ? "italic" : "normal", "font-size": size, fill: opts.fill || "var(--ink)", "text-anchor": opts.anchor || "middle", "letter-spacing": opts.ls ?? .4, ...(opts.attrs || {}) }); t.textContent = txt; return t; };
+  label("Gulf of Cambay", 21.55, 72.38, 5.2, { it: 1, attrs: { transform: `rotate(-74 ${P(21.55, 72.38).join(" ")})` }, fill: "var(--inkSoft)", ls: 1.2 });
+  label("ARABIAN SEA", 20.3, 71.6, 7, { sc: 1, ls: 3.2, fill: "var(--inkSoft)" });
+  label("KATHIAWAR", 21.6, 71.2, 6.2, { sc: 1, ls: 2.6, fill: "var(--inkSoft)" });
+  label("GUJARAT", 23.45, 73.55, 6.6, { sc: 1, ls: 3, fill: "var(--inkSoft)" });
+  label("Kheda", 22.82, 73.3, 4.2, { it: 1, fill: "var(--inkSoft)" });
+  // graticule ticks on a ruled border
+  const border = el("g", { "data-keep": 1 });
+  el("rect", { x: 4, y: 4, width: W - 8, height: H - 8, fill: "none", stroke: "var(--ink)", "stroke-width": .9 }, border);
+  el("rect", { x: 6.5, y: 6.5, width: W - 13, height: H - 13, fill: "none", stroke: "var(--ink)", "stroke-width": .35 }, border);
+  for (let lon = 71; lon <= 74; lon++) { const [x] = P(22, lon); el("line", { x1: x, y1: 4, x2: x, y2: 9, stroke: "var(--ink)", "stroke-width": .5 }, border); const t = el("text", { x: x + 1.2, y: 12.5, "font-family": "IM Fell English", "font-size": 3.2, fill: "var(--ink)" }, border); t.textContent = lon + "°E"; }
+  for (let lat = 21; lat <= 23; lat++) { const [, y] = P(lat, 72); el("line", { x1: 4, y1: y, x2: 9, y2: y, stroke: "var(--ink)", "stroke-width": .5 }, border); const t = el("text", { x: 10.5, y: y - 1, "font-family": "IM Fell English", "font-size": 3.2, fill: "var(--ink)" }, border); t.textContent = lat + "°N"; }
+  // compass rose
+  { const [cx, cy] = P(20.42, 71.2), g = el("g", { transform: `translate(${cx} ${cy})`, "data-keep": 1 });
+    el("circle", { r: 9, fill: "none", stroke: "var(--ink)", "stroke-width": .35 }, g); el("circle", { r: 7.6, fill: "none", stroke: "var(--ink)", "stroke-width": .2 }, g);
+    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, L = i % 2 ? 6 : 11, w = i % 2 ? 1.2 : 2; const tip = [Math.sin(a) * L, -Math.cos(a) * L], l = [Math.sin(a - Math.PI / 2) * w, -Math.cos(a - Math.PI / 2) * w], r = [-l[0], -l[1]];
+      el("path", { d: `M0,0L${l[0]},${l[1]}L${tip[0]},${tip[1]}Z`, fill: "var(--ink)" }, g); el("path", { d: `M0,0L${r[0]},${r[1]}L${tip[0]},${tip[1]}Z`, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": .25 }, g); }
+    const n = el("text", { x: 0, y: -12.5, "text-anchor": "middle", "font-family": "IM Fell English SC", "font-size": 4, fill: "var(--ink)" }, g); n.textContent = "N"; }
+  // scale bar: 50 km
+  { const [x0, y0] = P(20.18, 73.55), kmPer = 100 * 111 / 100, w = 50 / 111 * KY, g = el("g", { transform: `translate(${x0} ${y0})`, "data-keep": 1 });
+    for (let i = 0; i < 5; i++) el("rect", { x: i * w / 5, y: 0, width: w / 5, height: 1.4, fill: i % 2 ? "var(--paper)" : "var(--ink)", stroke: "var(--ink)", "stroke-width": .25 }, g);
+    for (const [v, x] of [["0", 0], ["25", w / 2], ["50 km", w]]) { const t = el("text", { x, y: -1.4, "text-anchor": "middle", "font-family": "IM Fell English", "font-size": 2.8, fill: "var(--ink)" }, g); t.textContent = v; }
+    void kmPer; }
+  // cartouche
+  { const [x, y] = P(23.78, 70.62), g = el("g", { transform: `translate(${x} ${y})`, "data-keep": 1 });
+    el("rect", { x: 0, y: 0, width: 104, height: 34, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": .8 }, g);
+    el("rect", { x: 2, y: 2, width: 100, height: 30, fill: "none", stroke: "var(--ink)", "stroke-width": .3 }, g);
+    for (const [cx, cy] of [[2, 2], [102, 2], [2, 32], [102, 32]]) el("circle", { cx, cy, r: 1.3, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": .3 }, g);
+    const a = el("text", { x: 52, y: 11, "text-anchor": "middle", "font-family": "IM Fell English SC", "font-size": 4.2, "letter-spacing": 1.6, fill: "var(--inkSoft)" }, g); a.textContent = "A MAP OF";
+    const b = el("text", { x: 52, y: 21, "text-anchor": "middle", "font-family": "IM Fell English", "font-size": 9, fill: "var(--ink)" }, g); b.textContent = "The Salt March";
+    const c = el("text", { x: 52, y: 28.5, "text-anchor": "middle", "font-family": "IM Fell English", "font-style": "italic", "font-size": 3.6, fill: "var(--inkSoft)" }, g); c.textContent = "12 March – 6 April 1930"; }
+
+  // the route: planned in pencil, walked in vermilion
+  const routeD = smooth(ROUTE, false);
+  const pencil = el("path", { "data-keep": 1, d: routeD, fill: "none", stroke: "var(--inkSoft)", "stroke-width": .45, "stroke-dasharray": "0.6 1.6", "stroke-linecap": "round", "stroke-opacity": .8 });
+  const walked = el("path", { "data-keep": 1, d: routeD, fill: "none", stroke: "var(--route)", "stroke-width": 1.35, "stroke-linecap": "round", "stroke-linejoin": "round" });
+  const routeLen = walked.getTotalLength();
+  walked.setAttribute("stroke-dasharray", `${routeLen} ${routeLen}`);
+  const routeKm = 385;
+  // crowds gather at each halt as the march passes: ink dots that grow in number
+  const crowdG = el("g");
+  const halts = TOWNS.filter(t => t[3]).map(t => {
+    const [x, y] = P(t[1], t[2]);
+    let best = 0, bd = 1e9; for (let s = 0; s <= 400; s++) { const q = walked.getPointAtLength(routeLen * s / 400), d = Math.hypot(q.x - x, q.y - y); if (d < bd) { bd = d; best = s / 400; } }
+    const pts = []; for (let i = 0; i < 46; i++) { const a = rnd() * 6.28, r = 1.2 + Math.sqrt(rnd()) * 4.2; pts.push([x + Math.cos(a) * r * 1.3, y + Math.sin(a) * r * .8, rnd()]); }
+    const path = el("path", { d: "", stroke: "var(--ink)", "stroke-width": .62, "stroke-linecap": "round", fill: "none" }, crowdG);
+    return { name: t[0], k: best, pts, path, shown: -1 };
+  });
+  // towns
+  const townG = el("g");
+  TOWNS.forEach(([n, lat, lon, onRoute, dx, dy, anchor]) => {
+    const [x, y] = P(lat, lon);
+    const pin = el("g", { "data-pin": `${x} ${y}` }, townG);
+    if (onRoute) { el("circle", { cx: x, cy: y, r: 1.05, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": .4 }, pin); el("circle", { cx: x, cy: y, r: .35, fill: "var(--ink)" }, pin); }
+    else el("rect", { x: x - .8, y: y - .8, width: 1.6, height: 1.6, fill: "var(--ink)" }, pin);
+    const t = el("text", { x: x + dx, y: y + dy, "text-anchor": anchor, "font-family": onRoute ? "IM Fell English" : "IM Fell English", "font-style": onRoute ? "normal" : "italic", "font-size": onRoute ? 3.3 : 3, fill: onRoute ? "var(--ink)" : "var(--inkSoft)" }, townG);
+    t.textContent = n;
+  });
+  // the marchers: a short procession of ink figures with a staff at the head
+  const marchG = el("g", { "data-keep": 1 }), N_M = 18, marchers = [];
+  for (let i = 0; i < N_M; i++) {
+    const g = el("g", {}, marchG);
+    el("circle", { cy: -2.05, r: .36, fill: "var(--ink)" }, g);
+    el("path", { d: "M0,-1.7L0,-.75", stroke: "var(--ink)", "stroke-width": .42, "stroke-linecap": "round" }, g);
+    const legs = el("path", { d: "", stroke: "var(--ink)", "stroke-width": .3, "stroke-linecap": "round", fill: "none" }, g);
+    if (i === 0) el("path", { d: "M.45,-2.6L.62,0", stroke: "var(--ink)", "stroke-width": .2 }, g);
+    marchers.push({ g, legs, ph: rnd() * 6.28 });
+  }
+  // salt at Dandi: crystals that catch the light, and a ring when the law is broken
+  const saltG = el("g", { opacity: 0, "data-keep": 1 }), [dx0, dy0] = P(20.885, 72.793);
+  for (let i = 0; i < 40; i++) { const a = rnd() * 6.28, r = .8 + rnd() * 3.6, x = dx0 - Math.abs(Math.cos(a)) * r * 1.2, y = dy0 + Math.sin(a) * r * .6, s = .12 + rnd() * .2; el("path", { d: `M${x},${y - s}L${x + s * .7},${y}L${x},${y + s}L${x - s * .7},${y}Z`, fill: "#fbf7ec", stroke: "var(--inkSoft)", "stroke-width": .08 }, saltG); }
+  const ring = el("circle", { cx: dx0, cy: dy0, r: 1, fill: "none", stroke: "var(--route)", "stroke-width": .3, opacity: 0 });
+  // the spread: salt made all along the coast afterwards
+  const spreadG = el("g");
+  const spread = []; for (let i = 0; i < 70; i++) { const c = COAST[1 + Math.floor(rnd() * (COAST.length - 3))], n = COAST[Math.min(COAST.length - 1, COAST.indexOf(c) + 1)], k = rnd(), lat = c[0] + (n[0] - c[0]) * k, lon = c[1] + (n[1] - c[1]) * k, [x, y] = P(lat, lon); spread.push({ e: el("circle", { cx: x, cy: y, r: .9, fill: "none", stroke: "var(--route)", "stroke-width": .35, opacity: 0 }, spreadG), d: Math.abs(lat - 20.89) + Math.abs(lon - 72.8) }); }
+  // paper on top: grain, stains, vignette, two old folds
+  el("rect", { x: -200, y: -200, width: W + 400, height: H + 400, filter: "url(#paperTex)", "pointer-events": "none" });
+  el("rect", { x: -200, y: -200, width: W + 400, height: H + 400, filter: "url(#stains)", "pointer-events": "none", opacity: .5 });
+  el("line", { x1: W / 2, y1: -200, x2: W / 2, y2: H + 200, stroke: "#fff8e8", "stroke-width": .6, "stroke-opacity": .5 });
+  el("line", { x1: W / 2 + .6, y1: -200, x2: W / 2 + .6, y2: H + 200, stroke: "#5a4128", "stroke-width": .3, "stroke-opacity": .18 });
+  el("line", { x1: -200, y1: H / 2, x2: W + 200, y2: H / 2, stroke: "#fff8e8", "stroke-width": .6, "stroke-opacity": .45 });
+  el("line", { x1: -200, y1: H / 2 + .6, x2: W + 200, y2: H / 2 + .6, stroke: "#5a4128", "stroke-width": .3, "stroke-opacity": .16 });
+  const vig = el("rect", { x: 0, y: 0, width: W, height: H, fill: "url(#vignette)", "pointer-events": "none" });
+  // ink keeps a pen's width on screen however far the camera moves in; labels and town marks grow only a little
+  const kept = e => e.closest("[data-keep]") || e.closest("[data-pin]");
+  svg.querySelectorAll("path,circle,line").forEach(e => { if (kept(e) || !e.getAttribute("stroke-width")) return; e.setAttribute("vector-effect", "non-scaling-stroke"); e.setAttribute("stroke-width", (parseFloat(e.getAttribute("stroke-width")) * 3.1).toFixed(2)); });
+  const pins = [...svg.querySelectorAll("[data-pin]")].map(e => ({ e, xy: e.getAttribute("data-pin") }));
+  const labels = [...svg.querySelectorAll("text")].filter(t => !t.closest("[data-keep]")).map(t => ({ e: t, x: +t.getAttribute("x"), y: +t.getAttribute("y"), base: t.getAttribute("transform") || "" }));
+  let lastK = -1;
+
+  /* ---------- the clock, the camera and the readout ---------- */
+  const sub = document.getElementById("sub"), readout = document.getElementById("readout"), stage = document.getElementById("stage");
+  const ease = k => (k = Math.max(0, Math.min(1, k)), k * k * k * (k * (k * 6 - 15) + 10));
+  const lineAt = t => { let i = SCRIPT.length - 1; while (i > 0 && SCRIPT[i].t0 > t) i--; return i; };
+  const camAt = t => {
+    // each line's camera is reached over the first 70% of the line, from where the last line left it
+    const i = lineAt(t), s = SCRIPT[i], prev = i ? SCRIPT[i - 1].cam[0] : [22.2, 72.3, 380], cur = s.cam[0], k = ease((t - s.t0) / (s.dur * .7));
+    return [prev[0] + (cur[0] - prev[0]) * k, prev[1] + (cur[1] - prev[1]) * k, Math.exp(Math.log(prev[2]) + (Math.log(cur[2]) - Math.log(prev[2])) * k)];
+  };
+  const routeAt = t => { const i = lineAt(t), s = SCRIPT[i], k = (t - s.t0) / s.dur; return s.route[0] + (s.route[1] - s.route[0]) * Math.max(0, Math.min(1, k)); };
+  const fmtDate = day => { const d = new Date(Date.UTC(1930, 2, 12 + Math.round(day))); return d.getUTCDate() + " " + ["January", "February", "March", "April"][d.getUTCMonth()]; };
+  let clock = 0, playing = true, last = performance.now(), shownLine = -1;
+  function frame(t) {
+    const [lat, lon, w] = camAt(t), [cx, cy] = P(lat, lon), r = stage.clientWidth / Math.max(1, stage.clientHeight), h = w / r;
+    svg.setAttribute("viewBox", `${(cx - w / 2).toFixed(2)} ${(cy - h / 2).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`);
+    vig.setAttribute("x", cx - w / 2); vig.setAttribute("y", cy - h / 2); vig.setAttribute("width", w); vig.setAttribute("height", h);
+    const zk = Math.max(.16, Math.min(1.5, w / 250)), mk = w / 150;
+    if (Math.abs(zk - lastK) > .002) {
+      lastK = zk;
+      for (const p of pins) { const [x, y] = p.xy.split(" "); p.e.setAttribute("transform", `translate(${x} ${y}) scale(${zk.toFixed(3)}) translate(${-x} ${-y})`); }
+      for (const l of labels) l.e.setAttribute("transform", `${l.base} translate(${l.x} ${l.y}) scale(${zk.toFixed(3)}) translate(${-l.x} ${-l.y})`);
+    }
+    walked.setAttribute("stroke-width", (1.35 * Math.max(.14, w / 371)).toFixed(3));
+    pencil.setAttribute("stroke-width", (.45 * Math.max(.14, w / 371)).toFixed(3)); pencil.setAttribute("stroke-dasharray", `${(.6 * Math.max(.14, w / 371)).toFixed(2)} ${(1.6 * Math.max(.14, w / 371)).toFixed(2)}`);
+    const k = routeAt(t), L = routeLen * k;
+    walked.setAttribute("stroke-dashoffset", (routeLen - L).toFixed(2));
+    // procession behind the head; they bunch up when the march halts
+    const moving = k > 0.001 && k < 0.999;
+    marchers.forEach((m, i) => {
+      const at = Math.max(0, L - i * (moving ? 1.05 : .55) * mk), p = walked.getPointAtLength(at), q = walked.getPointAtLength(Math.min(routeLen, at + .5));
+      const dir = q.x >= p.x ? 1 : -1, sw = moving ? Math.sin(t * 7 + m.ph) * .32 : 0;
+      m.g.setAttribute("transform", `translate(${(p.x + (i % 3 - 1) * .5 * mk).toFixed(2)} ${(p.y + (i % 2) * .35 * mk).toFixed(2)}) scale(${dir} 1) scale(${mk.toFixed(3)})`);
+      m.legs.setAttribute("d", `M0,-.8L${(.28 + sw).toFixed(2)},0M0,-.8L${(-.28 - sw).toFixed(2)},0`);
+      m.g.setAttribute("opacity", L > 0.01 || i === 0 ? 1 : 0);
+    });
+    // crowds
+    halts.forEach(h => { const g = Math.max(0, Math.min(1, (k - h.k) * 12 + .15)) * (k >= h.k - .02 ? 1 : 0), n = Math.round(g * h.pts.length); if (n !== h.shown) { h.shown = n; h.path.setAttribute("d", h.pts.slice(0, n).map(([x, y]) => `M${x.toFixed(2)},${y.toFixed(2)}h.01`).join("")); } });
+    // salt and spread
+    const si = SCRIPT.findIndex(s => s.salt), sp = SCRIPT.findIndex(s => s.spread);
+    const ks = (t - SCRIPT[si].t0) / SCRIPT[si].dur;
+    saltG.setAttribute("opacity", Math.max(0, Math.min(1, ks * 3)).toFixed(2));
+    const kr = Math.max(0, ks - .35) * 2.2; ring.setAttribute("r", (1 + kr * 6).toFixed(2)); ring.setAttribute("opacity", (kr > 0 && kr < 1 ? 1 - kr : 0).toFixed(2));
+    const kp = (t - SCRIPT[sp].t0) / SCRIPT[sp].dur;
+    spread.forEach(s => { const a = Math.max(0, Math.min(1, (kp * 3 - s.d * 1.1))); s.e.setAttribute("opacity", (a * (t < SCRIPT[sp].t0 ? 0 : 1)).toFixed(2)); s.e.setAttribute("r", (.6 + a * .9).toFixed(2)); });
+    // narration and readout
+    const li = t < TOTAL - 2 ? lineAt(t) : -1;
+    if (li !== shownLine) { shownLine = li; sub.style.opacity = 0; setTimeout(() => { sub.textContent = li >= 0 ? SCRIPT[li].text : ""; sub.style.opacity = 1; }, li >= 0 ? 250 : 0); }
+    const day = k * 24, near = halts.reduce((a, h) => (h.k <= k + .005 ? h : a), halts[0]);
+    readout.innerHTML = `<b>${k >= 1 ? (si >= 0 && t >= SCRIPT[si].t0 ? "6 April" : "5 April") : fmtDate(day)} 1930</b>${k >= 1 ? "Dandi" : near.name} · ${Math.round(k * routeKm)} km · day ${Math.min(25, 1 + Math.floor(day + (t >= SCRIPT[si].t0 ? 1 : 0)))}`;
+  }
+  function loop(now) {
+    requestAnimationFrame(loop);
+    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    if (playing) clock = (clock + dt) % TOTAL;
+    frame(clock);
+  }
+  // controls: play/pause and a button per narration line
+  const bar = document.getElementById("bar"), playB = document.getElementById("play"), lineBtns = [];
+  playB.onclick = () => { playing = !playing; playB.textContent = playing ? "Pause" : "Play"; };
+  SCRIPT.forEach((s, i) => { const b = document.createElement("button"); b.type = "button"; b.textContent = String(i + 1); b.title = s.text; b.onclick = () => { clock = s.t0 + .01; }; bar.insertBefore(b, bar.querySelector(".note")); lineBtns.push(b); });
+  setInterval(() => { const li = lineAt(clock); lineBtns.forEach((b, i) => b.setAttribute("aria-pressed", i === li)); }, 250);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { playing = false; playB.textContent = "Play"; clock = SCRIPT[5].t0 + SCRIPT[5].dur - .1; }
+  window.SALT = { seek: t => { clock = t; frame(t); }, SCRIPT, TOTAL };
+  frame(clock);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
